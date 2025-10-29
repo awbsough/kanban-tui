@@ -25,6 +25,7 @@ enum InputMode {
 struct App {
     board: Board,
     selected_column: usize,
+    selected_task_index: Option<usize>,
     input_mode: InputMode,
     input_buffer: String,
 }
@@ -34,6 +35,7 @@ impl App {
         Self {
             board: Board::new("My Kanban Board".to_string()),
             selected_column: 0,
+            selected_task_index: None,
             input_mode: InputMode::Normal,
             input_buffer: String::new(),
         }
@@ -41,6 +43,7 @@ impl App {
 
     fn next_column(&mut self) {
         self.selected_column = (self.selected_column + 1) % self.board.columns.len();
+        self.update_task_selection();
     }
 
     fn previous_column(&mut self) {
@@ -48,6 +51,67 @@ impl App {
             self.selected_column -= 1;
         } else {
             self.selected_column = self.board.columns.len() - 1;
+        }
+        self.update_task_selection();
+    }
+
+    fn update_task_selection(&mut self) {
+        // Auto-select first task if column has tasks, otherwise clear selection
+        let task_count = self.board.columns[self.selected_column].tasks.len();
+        self.selected_task_index = if task_count > 0 { Some(0) } else { None };
+    }
+
+    fn next_task(&mut self) {
+        let task_count = self.board.columns[self.selected_column].tasks.len();
+        if task_count == 0 {
+            return;
+        }
+
+        self.selected_task_index = Some(match self.selected_task_index {
+            Some(idx) => (idx + 1) % task_count,
+            None => 0,
+        });
+    }
+
+    fn previous_task(&mut self) {
+        let task_count = self.board.columns[self.selected_column].tasks.len();
+        if task_count == 0 {
+            return;
+        }
+
+        self.selected_task_index = Some(match self.selected_task_index {
+            Some(idx) => {
+                if idx > 0 {
+                    idx - 1
+                } else {
+                    task_count - 1
+                }
+            }
+            None => 0,
+        });
+    }
+
+    fn delete_selected_task(&mut self) {
+        if let Some(task_idx) = self.selected_task_index {
+            let column = &self.board.columns[self.selected_column];
+
+            // Get task ID before deletion
+            if task_idx < column.tasks.len() {
+                let task_id = column.tasks[task_idx].id;
+
+                // Remove the task
+                self.board.columns[self.selected_column].remove_task(task_id);
+
+                // Adjust selection after deletion
+                let new_task_count = self.board.columns[self.selected_column].tasks.len();
+                if new_task_count == 0 {
+                    self.selected_task_index = None;
+                } else if task_idx >= new_task_count {
+                    // If we deleted the last task, select the new last task
+                    self.selected_task_index = Some(new_task_count - 1);
+                }
+                // Otherwise keep the same index (which now points to the next task)
+            }
         }
     }
 
@@ -60,6 +124,12 @@ impl App {
         if !self.input_buffer.is_empty() {
             let _ = self.board.add_task(self.selected_column, self.input_buffer.clone());
             self.input_buffer.clear();
+
+            // Select the newly created task (last one in the column)
+            let task_count = self.board.columns[self.selected_column].tasks.len();
+            if task_count > 0 {
+                self.selected_task_index = Some(task_count - 1);
+            }
         }
         self.input_mode = InputMode::Normal;
     }
@@ -128,6 +198,9 @@ fn run_app<B: ratatui::backend::Backend>(
                         KeyCode::Char('n') => app.start_creating(),
                         KeyCode::Char('h') | KeyCode::Left => app.previous_column(),
                         KeyCode::Char('l') | KeyCode::Right => app.next_column(),
+                        KeyCode::Char('j') | KeyCode::Down => app.next_task(),
+                        KeyCode::Char('k') | KeyCode::Up => app.previous_task(),
+                        KeyCode::Char('d') => app.delete_selected_task(),
                         _ => {}
                     },
                     InputMode::Creating => match key.code {
@@ -178,19 +251,30 @@ fn render_columns(f: &mut Frame, app: &App, area: Rect) {
         .split(area);
 
     for (i, column) in app.board.columns.iter().enumerate() {
-        let is_selected = i == app.selected_column;
-        render_column(f, column, is_selected, chunks[i]);
+        let is_selected_column = i == app.selected_column;
+        let selected_task = if is_selected_column {
+            app.selected_task_index
+        } else {
+            None
+        };
+        render_column(f, column, is_selected_column, selected_task, chunks[i]);
     }
 }
 
-fn render_column(f: &mut Frame, column: &kanban_tui::Column, is_selected: bool, area: Rect) {
-    let color = if is_selected {
+fn render_column(
+    f: &mut Frame,
+    column: &kanban_tui::Column,
+    is_selected_column: bool,
+    selected_task_index: Option<usize>,
+    area: Rect,
+) {
+    let color = if is_selected_column {
         Color::Cyan
     } else {
         Color::White
     };
 
-    let border_style = if is_selected {
+    let border_style = if is_selected_column {
         Style::default()
             .fg(color)
             .add_modifier(Modifier::BOLD)
@@ -198,7 +282,7 @@ fn render_column(f: &mut Frame, column: &kanban_tui::Column, is_selected: bool, 
         Style::default().fg(color)
     };
 
-    let title = if is_selected {
+    let title = if is_selected_column {
         format!("▶ {} ({}) ◀", column.name, column.tasks.len())
     } else {
         format!("{} ({})", column.name, column.tasks.len())
@@ -209,13 +293,25 @@ fn render_column(f: &mut Frame, column: &kanban_tui::Column, is_selected: bool, 
         .borders(Borders::ALL)
         .border_style(border_style);
 
-    // Create list items from tasks
+    // Create list items from tasks with numbering and selection highlighting
     let items: Vec<ListItem> = column
         .tasks
         .iter()
-        .map(|task| {
-            let content = format!("• {}", task.title);
-            ListItem::new(content).style(Style::default().fg(Color::White))
+        .enumerate()
+        .map(|(idx, task)| {
+            let content = format!("{}. {}", idx + 1, task.title);
+            let is_selected_task = selected_task_index == Some(idx);
+
+            let style = if is_selected_task {
+                Style::default()
+                    .bg(Color::Yellow)
+                    .fg(Color::Black)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+
+            ListItem::new(content).style(style)
         })
         .collect();
 
@@ -227,15 +323,20 @@ fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
     let (text, style) = match app.input_mode {
         InputMode::Normal => {
             let help = vec![
-                Span::raw("Press "),
                 Span::styled("n", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(" to create task | "),
+                Span::raw(": new task | "),
                 Span::styled("h/l", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(" or "),
                 Span::styled("←/→", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(" to navigate | "),
+                Span::raw(": columns | "),
+                Span::styled("j/k", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(" or "),
+                Span::styled("↑/↓", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": tasks | "),
+                Span::styled("d", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": delete | "),
                 Span::styled("q", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(" to quit"),
+                Span::raw(": quit"),
             ];
             (Line::from(help), Style::default().fg(Color::Gray))
         }
@@ -276,6 +377,7 @@ mod tests {
     fn test_app_initialization() {
         let app = App::new();
         assert_eq!(app.selected_column, 0);
+        assert_eq!(app.selected_task_index, None);
         assert_eq!(app.input_mode, InputMode::Normal);
         assert_eq!(app.input_buffer, "");
         assert_eq!(app.board.columns.len(), 3);
@@ -518,5 +620,269 @@ mod tests {
         assert_eq!(app.input_mode, InputMode::Normal);
         assert_eq!(app.board.columns[1].tasks.len(), 1);
         assert_eq!(app.board.columns[1].tasks[0].title, "Fix the bug");
+    }
+
+    #[test]
+    fn test_task_selection_auto_updates_on_column_change() {
+        let mut app = App::new();
+
+        // Add tasks to columns
+        app.board.add_task(0, "Task 1".to_string()).unwrap();
+        app.board.add_task(1, "Task 2".to_string()).unwrap();
+
+        // Initially on column 0 with no selection
+        assert_eq!(app.selected_column, 0);
+        assert_eq!(app.selected_task_index, None);
+
+        // Navigate to column 0 (which has tasks)
+        app.next_column();
+        app.previous_column();
+        // Should auto-select first task
+        assert_eq!(app.selected_task_index, Some(0));
+
+        // Navigate to column 1 (which has tasks)
+        app.next_column();
+        // Should auto-select first task of new column
+        assert_eq!(app.selected_task_index, Some(0));
+
+        // Navigate to column 2 (which has no tasks)
+        app.next_column();
+        // Should clear selection
+        assert_eq!(app.selected_task_index, None);
+    }
+
+    #[test]
+    fn test_next_task_navigation() {
+        let mut app = App::new();
+
+        // Add 3 tasks to column 0
+        app.board.add_task(0, "Task 1".to_string()).unwrap();
+        app.board.add_task(0, "Task 2".to_string()).unwrap();
+        app.board.add_task(0, "Task 3".to_string()).unwrap();
+
+        // Start with no selection
+        assert_eq!(app.selected_task_index, None);
+
+        // First next_task should select task 0
+        app.next_task();
+        assert_eq!(app.selected_task_index, Some(0));
+
+        // Move to task 1
+        app.next_task();
+        assert_eq!(app.selected_task_index, Some(1));
+
+        // Move to task 2
+        app.next_task();
+        assert_eq!(app.selected_task_index, Some(2));
+
+        // Wrap back to task 0
+        app.next_task();
+        assert_eq!(app.selected_task_index, Some(0));
+    }
+
+    #[test]
+    fn test_previous_task_navigation() {
+        let mut app = App::new();
+
+        // Add 3 tasks to column 0
+        app.board.add_task(0, "Task 1".to_string()).unwrap();
+        app.board.add_task(0, "Task 2".to_string()).unwrap();
+        app.board.add_task(0, "Task 3".to_string()).unwrap();
+
+        // Start with no selection
+        assert_eq!(app.selected_task_index, None);
+
+        // First previous_task should select task 0
+        app.previous_task();
+        assert_eq!(app.selected_task_index, Some(0));
+
+        // Going backwards should wrap to last task
+        app.previous_task();
+        assert_eq!(app.selected_task_index, Some(2));
+
+        // Move to task 1
+        app.previous_task();
+        assert_eq!(app.selected_task_index, Some(1));
+
+        // Move to task 0
+        app.previous_task();
+        assert_eq!(app.selected_task_index, Some(0));
+    }
+
+    #[test]
+    fn test_task_navigation_on_empty_column() {
+        let mut app = App::new();
+
+        // Column 0 is empty
+        assert_eq!(app.board.columns[0].tasks.len(), 0);
+
+        // next_task on empty column should do nothing
+        app.next_task();
+        assert_eq!(app.selected_task_index, None);
+
+        // previous_task on empty column should do nothing
+        app.previous_task();
+        assert_eq!(app.selected_task_index, None);
+    }
+
+    #[test]
+    fn test_delete_selected_task() {
+        let mut app = App::new();
+
+        // Add 3 tasks
+        app.board.add_task(0, "Task 1".to_string()).unwrap();
+        app.board.add_task(0, "Task 2".to_string()).unwrap();
+        app.board.add_task(0, "Task 3".to_string()).unwrap();
+
+        // Select first task
+        app.selected_task_index = Some(0);
+
+        // Delete it
+        app.delete_selected_task();
+
+        // Should have 2 tasks remaining
+        assert_eq!(app.board.columns[0].tasks.len(), 2);
+        // Task 2 is now at index 0
+        assert_eq!(app.board.columns[0].tasks[0].title, "Task 2");
+        // Selection should still be at index 0 (pointing to what was Task 2)
+        assert_eq!(app.selected_task_index, Some(0));
+    }
+
+    #[test]
+    fn test_delete_last_task_in_list() {
+        let mut app = App::new();
+
+        // Add 3 tasks
+        app.board.add_task(0, "Task 1".to_string()).unwrap();
+        app.board.add_task(0, "Task 2".to_string()).unwrap();
+        app.board.add_task(0, "Task 3".to_string()).unwrap();
+
+        // Select last task (index 2)
+        app.selected_task_index = Some(2);
+
+        // Delete it
+        app.delete_selected_task();
+
+        // Should have 2 tasks remaining
+        assert_eq!(app.board.columns[0].tasks.len(), 2);
+        // Selection should move to new last task (index 1)
+        assert_eq!(app.selected_task_index, Some(1));
+        assert_eq!(app.board.columns[0].tasks[1].title, "Task 2");
+    }
+
+    #[test]
+    fn test_delete_only_task() {
+        let mut app = App::new();
+
+        // Add one task
+        app.board.add_task(0, "Only task".to_string()).unwrap();
+
+        // Select it
+        app.selected_task_index = Some(0);
+
+        // Delete it
+        app.delete_selected_task();
+
+        // Should have no tasks
+        assert_eq!(app.board.columns[0].tasks.len(), 0);
+        // Selection should be cleared
+        assert_eq!(app.selected_task_index, None);
+    }
+
+    #[test]
+    fn test_delete_with_no_selection() {
+        let mut app = App::new();
+
+        // Add task
+        app.board.add_task(0, "Task 1".to_string()).unwrap();
+
+        // No selection
+        assert_eq!(app.selected_task_index, None);
+
+        // Try to delete - should do nothing
+        app.delete_selected_task();
+
+        // Task should still exist
+        assert_eq!(app.board.columns[0].tasks.len(), 1);
+    }
+
+    #[test]
+    fn test_delete_middle_task() {
+        let mut app = App::new();
+
+        // Add 3 tasks
+        app.board.add_task(0, "Task 1".to_string()).unwrap();
+        app.board.add_task(0, "Task 2".to_string()).unwrap();
+        app.board.add_task(0, "Task 3".to_string()).unwrap();
+
+        // Select middle task
+        app.selected_task_index = Some(1);
+
+        // Delete it
+        app.delete_selected_task();
+
+        // Should have 2 tasks
+        assert_eq!(app.board.columns[0].tasks.len(), 2);
+        assert_eq!(app.board.columns[0].tasks[0].title, "Task 1");
+        assert_eq!(app.board.columns[0].tasks[1].title, "Task 3");
+        // Selection should stay at index 1 (now pointing to Task 3)
+        assert_eq!(app.selected_task_index, Some(1));
+    }
+
+    #[test]
+    fn test_create_task_selects_new_task() {
+        let mut app = App::new();
+
+        // Create a task
+        app.start_creating();
+        app.input_buffer = "New task".to_string();
+        app.create_task();
+
+        // Should select the newly created task
+        assert_eq!(app.selected_task_index, Some(0));
+        assert_eq!(app.board.columns[0].tasks[0].title, "New task");
+
+        // Create another task
+        app.start_creating();
+        app.input_buffer = "Another task".to_string();
+        app.create_task();
+
+        // Should select the newest task
+        assert_eq!(app.selected_task_index, Some(1));
+    }
+
+    #[test]
+    fn test_complete_deletion_workflow() {
+        let mut app = App::new();
+
+        // Create 3 tasks
+        for i in 1..=3 {
+            app.start_creating();
+            app.input_buffer = format!("Task {}", i);
+            app.create_task();
+        }
+
+        assert_eq!(app.board.columns[0].tasks.len(), 3);
+        assert_eq!(app.selected_task_index, Some(2)); // Last created
+
+        // Navigate to first task
+        app.previous_task();
+        app.previous_task();
+        assert_eq!(app.selected_task_index, Some(0));
+
+        // Delete first task
+        app.delete_selected_task();
+        assert_eq!(app.board.columns[0].tasks.len(), 2);
+        assert_eq!(app.board.columns[0].tasks[0].title, "Task 2");
+
+        // Delete current task (now Task 2)
+        app.delete_selected_task();
+        assert_eq!(app.board.columns[0].tasks.len(), 1);
+        assert_eq!(app.board.columns[0].tasks[0].title, "Task 3");
+
+        // Delete last task
+        app.delete_selected_task();
+        assert_eq!(app.board.columns[0].tasks.len(), 0);
+        assert_eq!(app.selected_task_index, None);
     }
 }

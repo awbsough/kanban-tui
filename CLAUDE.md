@@ -171,9 +171,9 @@ cargo run
 ### Phase 1: Core Functionality (MVP)
 - [x] Basic TUI with three columns (To Do, In Progress, Done)
 - [x] Create and view tasks
-- [ ] Delete tasks
+- [x] Delete tasks
 - [ ] Move tasks between columns
-- [x] Basic keyboard navigation (h/l or arrow keys)
+- [x] Basic keyboard navigation (h/l or arrow keys, j/k for tasks)
 
 ### Phase 2: Enhanced Features
 - [ ] Persistent storage (JSON file)

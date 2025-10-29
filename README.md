@@ -6,6 +6,9 @@ A terminal user interface (TUI) for managing Kanban boards, written in Rust.
 
 - Interactive terminal-based Kanban board
 - Three default columns: To Do, In Progress, Done
+- Create, delete, and move tasks between columns
+- Vim-style keyboard navigation (h/j/k/l)
+- Persistent storage (auto-saves your board)
 - Fast and lightweight
 - Cross-platform support
 
@@ -52,9 +55,23 @@ cargo test
 
 ## Usage
 
-Press `q` to quit the application.
+### Keyboard Shortcuts
 
-(More keybindings and features coming soon!)
+- `n` - Create a new task in the current column
+- `h`/`l` or `←`/`→` - Navigate between columns
+- `j`/`k` or `↑`/`↓` - Navigate between tasks
+- `Shift+h`/`Shift+l` or `H`/`L` - Move selected task left/right
+- `d` - Delete selected task
+- `q` - Quit the application
+
+### Data Storage
+
+Your board is automatically saved after every change to:
+- **Linux**: `~/.config/kanban-tui/board.json`
+- **macOS**: `~/Library/Application Support/kanban-tui/board.json`
+- **Windows**: `%APPDATA%\kanban-tui\board.json`
+
+The board loads automatically when you start the application.
 
 ## Project Structure
 
@@ -62,7 +79,8 @@ Press `q` to quit the application.
 kanban-tui/
 ├── src/
 │   ├── main.rs          # Application entry point with TUI
-│   └── lib.rs           # Core library with business logic
+│   ├── lib.rs           # Core library with business logic
+│   └── storage.rs       # Persistent storage implementation
 ├── tests/               # Integration tests
 ├── flake.nix            # Nix development environment
 ├── .envrc               # direnv configuration
@@ -84,7 +102,7 @@ cargo build --release
 
 ## Testing
 
-The project includes both unit tests (in `src/lib.rs`) and integration tests (in `tests/`).
+The project includes both unit tests (in `src/lib.rs` and `src/main.rs`) and integration tests (in `tests/`). Currently 51 tests covering all functionality.
 
 ```bash
 # Run all tests

@@ -191,7 +191,7 @@ cargo run
 2. **Terminal Backend**: `crossterm` for cross-platform compatibility
 3. **State Management**: Centralized application state with event-driven updates
 4. **Storage Format**: JSON for human-readable persistence
-5. **Storage Location**: Platform-specific config directory (`~/.config/kanban-tui/board.json` on Linux/macOS, `%APPDATA%\kanban-tui\board.json` on Windows)
+5. **Storage Location**: Platform-specific config directory (`~/.config/kanban-tui/board.json` on Linux, `~/Library/Application Support/kanban-tui/board.json` on macOS, `%APPDATA%\kanban-tui\board.json` on Windows)
 6. **Auto-save**: Board automatically saves after every modification (create, delete, move)
 7. **Auto-load**: Board automatically loads from storage on startup
 8. **Development Environment**: Nix flakes for reproducibility across machines
@@ -202,7 +202,8 @@ cargo run
 The storage module (`src/storage.rs`) provides persistent storage using JSON files:
 
 - **Storage Location**: Uses `dirs` crate to get platform-specific config directory
-  - Linux/macOS: `~/.config/kanban-tui/board.json`
+  - Linux: `~/.config/kanban-tui/board.json`
+  - macOS: `~/Library/Application Support/kanban-tui/board.json`
   - Windows: `%APPDATA%\kanban-tui\board.json`
 - **Auto-save**: Automatically saves after create/delete/move operations
 - **Auto-load**: Loads saved board on application startup

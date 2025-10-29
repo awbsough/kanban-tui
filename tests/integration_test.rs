@@ -1,4 +1,4 @@
-use kanban_tui::{Board, Column, Task};
+use kanban_tui::Board;
 
 #[test]
 fn test_complete_workflow() {

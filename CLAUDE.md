@@ -169,10 +169,11 @@ cargo run
 ## Features Roadmap
 
 ### Phase 1: Core Functionality (MVP)
-- [ ] Basic TUI with three columns (To Do, In Progress, Done)
-- [ ] Create, view, and delete tasks
+- [x] Basic TUI with three columns (To Do, In Progress, Done)
+- [x] Create and view tasks
+- [ ] Delete tasks
 - [ ] Move tasks between columns
-- [ ] Basic keyboard navigation
+- [x] Basic keyboard navigation (h/l or arrow keys)
 
 ### Phase 2: Enhanced Features
 - [ ] Persistent storage (JSON file)

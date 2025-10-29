@@ -131,6 +131,27 @@ impl Board {
         self.columns[to_column].add_task(task);
         Ok(())
     }
+
+    /// Updates the title of a task in a specified column
+    pub fn update_task_title(
+        &mut self,
+        column_index: usize,
+        task_id: usize,
+        new_title: String,
+    ) -> Result<(), String> {
+        if column_index >= self.columns.len() {
+            return Err("Column index out of bounds".to_string());
+        }
+
+        let task = self.columns[column_index]
+            .tasks
+            .iter_mut()
+            .find(|t| t.id == task_id)
+            .ok_or("Task not found in column")?;
+
+        task.title = new_title;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -207,6 +228,39 @@ mod tests {
         let task_id = board.add_task(0, "Task".to_string()).unwrap();
 
         let result = board.move_task(0, 10, task_id);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_board_update_task_title() {
+        let mut board = Board::new("Test".to_string());
+        let task_id = board.add_task(0, "Original Title".to_string()).unwrap();
+
+        // Update the task title
+        let result = board.update_task_title(0, task_id, "Updated Title".to_string());
+        assert!(result.is_ok());
+
+        // Verify the title was updated
+        assert_eq!(board.columns[0].tasks[0].title, "Updated Title");
+    }
+
+    #[test]
+    fn test_board_update_task_title_invalid_column() {
+        let mut board = Board::new("Test".to_string());
+        let task_id = board.add_task(0, "Task".to_string()).unwrap();
+
+        // Try to update task in non-existent column
+        let result = board.update_task_title(10, task_id, "New Title".to_string());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_board_update_task_title_invalid_task() {
+        let mut board = Board::new("Test".to_string());
+        board.add_task(0, "Task".to_string()).unwrap();
+
+        // Try to update non-existent task
+        let result = board.update_task_title(0, 9999, "New Title".to_string());
         assert!(result.is_err());
     }
 }

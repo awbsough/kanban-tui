@@ -58,6 +58,7 @@ cargo test
 ### Keyboard Shortcuts
 
 - `n` - Create a new task in the current column
+- `e` - Edit the selected task title
 - `h`/`l` or `←`/`→` - Navigate between columns
 - `j`/`k` or `↑`/`↓` - Navigate between tasks
 - `Shift+h`/`Shift+l` or `H`/`L` - Move selected task left/right
@@ -102,7 +103,7 @@ cargo build --release
 
 ## Testing
 
-The project includes both unit tests (in `src/lib.rs` and `src/main.rs`) and integration tests (in `tests/`). Currently 51 tests covering all functionality.
+The project includes both unit tests (in `src/lib.rs` and `src/main.rs`) and integration tests (in `tests/`). Currently 62 tests covering all functionality.
 
 ```bash
 # Run all tests

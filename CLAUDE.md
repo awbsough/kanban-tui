@@ -175,7 +175,7 @@ cargo run
 
 ### Phase 2: Enhanced Features
 - [x] Persistent storage (JSON file)
-- [ ] Edit task details
+- [x] Edit task details (title editing with 'e' key)
 - [ ] Task descriptions and metadata
 - [ ] Color coding and priorities
 

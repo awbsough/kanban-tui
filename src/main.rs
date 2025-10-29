@@ -19,6 +19,7 @@ use std::io;
 enum InputMode {
     Normal,
     Creating,
+    Editing,
 }
 
 /// Application state
@@ -28,6 +29,7 @@ struct App {
     selected_task_index: Option<usize>,
     input_mode: InputMode,
     input_buffer: String,
+    editing_task_id: Option<usize>,
     storage: Storage,
 }
 
@@ -48,6 +50,7 @@ impl App {
             selected_task_index: None,
             input_mode: InputMode::Normal,
             input_buffer: String::new(),
+            editing_task_id: None,
             storage,
         }
     }
@@ -229,14 +232,51 @@ impl App {
         self.input_buffer.clear();
     }
 
+    fn start_editing(&mut self) {
+        if let Some(task_idx) = self.selected_task_index {
+            let column = &self.board.columns[self.selected_column];
+            if task_idx < column.tasks.len() {
+                let task = &column.tasks[task_idx];
+                self.editing_task_id = Some(task.id);
+                self.input_buffer = task.title.clone();
+                self.input_mode = InputMode::Editing;
+            }
+        }
+    }
+
+    fn save_edit(&mut self) {
+        if let Some(task_id) = self.editing_task_id {
+            if !self.input_buffer.is_empty() {
+                let _ = self.board.update_task_title(
+                    self.selected_column,
+                    task_id,
+                    self.input_buffer.clone(),
+                );
+
+                // Save after editing
+                self.save();
+            }
+        }
+
+        self.input_mode = InputMode::Normal;
+        self.input_buffer.clear();
+        self.editing_task_id = None;
+    }
+
+    fn cancel_editing(&mut self) {
+        self.input_mode = InputMode::Normal;
+        self.input_buffer.clear();
+        self.editing_task_id = None;
+    }
+
     fn handle_char_input(&mut self, c: char) {
-        if self.input_mode == InputMode::Creating {
+        if self.input_mode == InputMode::Creating || self.input_mode == InputMode::Editing {
             self.input_buffer.push(c);
         }
     }
 
     fn handle_backspace(&mut self) {
-        if self.input_mode == InputMode::Creating {
+        if self.input_mode == InputMode::Creating || self.input_mode == InputMode::Editing {
             self.input_buffer.pop();
         }
     }
@@ -286,6 +326,7 @@ fn run_app<B: ratatui::backend::Backend>(
                     InputMode::Normal => match key.code {
                         KeyCode::Char('q') => return Ok(()),
                         KeyCode::Char('n') => app.start_creating(),
+                        KeyCode::Char('e') => app.start_editing(),
                         KeyCode::Char('h') | KeyCode::Left => {
                             if key.modifiers.contains(KeyModifiers::SHIFT) {
                                 app.move_task_left();
@@ -310,6 +351,22 @@ fn run_app<B: ratatui::backend::Backend>(
                     InputMode::Creating => match key.code {
                         KeyCode::Enter => app.create_task(),
                         KeyCode::Esc => app.cancel_creating(),
+                        KeyCode::Char(c) => {
+                            if key.modifiers.contains(KeyModifiers::CONTROL) {
+                                // Allow Ctrl+C to quit
+                                if c == 'c' {
+                                    return Ok(());
+                                }
+                            } else {
+                                app.handle_char_input(c);
+                            }
+                        }
+                        KeyCode::Backspace => app.handle_backspace(),
+                        _ => {}
+                    },
+                    InputMode::Editing => match key.code {
+                        KeyCode::Enter => app.save_edit(),
+                        KeyCode::Esc => app.cancel_editing(),
                         KeyCode::Char(c) => {
                             if key.modifiers.contains(KeyModifiers::CONTROL) {
                                 // Allow Ctrl+C to quit
@@ -429,6 +486,8 @@ fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
             let help = vec![
                 Span::styled("n", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(": new | "),
+                Span::styled("e", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": edit | "),
                 Span::styled("h/l", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(": columns | "),
                 Span::styled("j/k", Style::default().add_modifier(Modifier::BOLD)),
@@ -459,6 +518,25 @@ fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
             (
                 Line::from(prompt),
                 Style::default().fg(Color::Yellow),
+            )
+        }
+        InputMode::Editing => {
+            let prompt = vec![
+                Span::styled(
+                    "Editing task: ",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(&app.input_buffer),
+                Span::styled("█", Style::default().fg(Color::Cyan)),
+                Span::raw(" | "),
+                Span::styled("Enter", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(" to save | "),
+                Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(" to cancel"),
+            ];
+            (
+                Line::from(prompt),
+                Style::default().fg(Color::Green),
             )
         }
     };
@@ -493,6 +571,7 @@ mod tests {
             selected_task_index: None,
             input_mode: InputMode::Normal,
             input_buffer: String::new(),
+            editing_task_id: None,
             storage,
         }
     }
@@ -1289,6 +1368,181 @@ mod tests {
         assert_eq!(loaded.columns[0].tasks.len(), 0);
         assert_eq!(loaded.columns[1].tasks.len(), 1);
         assert_eq!(loaded.columns[1].tasks[0].title, "Moving task");
+
+        // Cleanup
+        std::fs::remove_file(storage_path).ok();
+    }
+
+    #[test]
+    fn test_start_editing() {
+        let mut app = test_app();
+
+        // Create a task
+        app.board.add_task(0, "Original Title".to_string()).unwrap();
+        app.selected_task_index = Some(0);
+
+        // Start editing
+        app.start_editing();
+
+        // Verify we're in editing mode
+        assert_eq!(app.input_mode, InputMode::Editing);
+        // Buffer should be pre-populated with task title
+        assert_eq!(app.input_buffer, "Original Title");
+        // Should track which task is being edited
+        assert!(app.editing_task_id.is_some());
+    }
+
+    #[test]
+    fn test_save_edit() {
+        let mut app = test_app();
+
+        // Create a task and start editing it
+        let task_id = app.board.add_task(0, "Original Title".to_string()).unwrap();
+        app.selected_task_index = Some(0);
+        app.start_editing();
+
+        // Modify the title
+        app.input_buffer = "Updated Title".to_string();
+
+        // Save the edit
+        app.save_edit();
+
+        // Verify changes
+        assert_eq!(app.input_mode, InputMode::Normal);
+        assert_eq!(app.input_buffer, "");
+        assert_eq!(app.editing_task_id, None);
+        assert_eq!(app.board.columns[0].tasks[0].title, "Updated Title");
+        assert_eq!(app.board.columns[0].tasks[0].id, task_id);
+    }
+
+    #[test]
+    fn test_cancel_editing() {
+        let mut app = test_app();
+
+        // Create a task and start editing it
+        app.board.add_task(0, "Original Title".to_string()).unwrap();
+        app.selected_task_index = Some(0);
+        app.start_editing();
+
+        // Modify the buffer
+        app.input_buffer = "Changed but cancelled".to_string();
+
+        // Cancel editing
+        app.cancel_editing();
+
+        // Verify state was reset
+        assert_eq!(app.input_mode, InputMode::Normal);
+        assert_eq!(app.input_buffer, "");
+        assert_eq!(app.editing_task_id, None);
+        // Original title should be unchanged
+        assert_eq!(app.board.columns[0].tasks[0].title, "Original Title");
+    }
+
+    #[test]
+    fn test_edit_with_no_selection() {
+        let mut app = test_app();
+
+        // Create a task but don't select it
+        app.board.add_task(0, "Task".to_string()).unwrap();
+        app.selected_task_index = None;
+
+        // Try to edit - should do nothing
+        app.start_editing();
+
+        // Should still be in Normal mode
+        assert_eq!(app.input_mode, InputMode::Normal);
+        assert_eq!(app.input_buffer, "");
+        assert_eq!(app.editing_task_id, None);
+    }
+
+    #[test]
+    fn test_save_edit_with_empty_buffer() {
+        let mut app = test_app();
+
+        // Create a task and start editing it
+        app.board.add_task(0, "Original Title".to_string()).unwrap();
+        app.selected_task_index = Some(0);
+        app.start_editing();
+
+        // Clear the buffer
+        app.input_buffer.clear();
+
+        // Try to save - should not update title
+        app.save_edit();
+
+        // Should return to Normal mode
+        assert_eq!(app.input_mode, InputMode::Normal);
+        // Title should remain unchanged
+        assert_eq!(app.board.columns[0].tasks[0].title, "Original Title");
+    }
+
+    #[test]
+    fn test_complete_edit_workflow() {
+        let mut app = test_app();
+
+        // Create a task
+        app.start_creating();
+        app.input_buffer = "Initial Task".to_string();
+        app.create_task();
+
+        assert_eq!(app.board.columns[0].tasks[0].title, "Initial Task");
+        assert_eq!(app.selected_task_index, Some(0));
+
+        // Edit the task
+        app.start_editing();
+        assert_eq!(app.input_mode, InputMode::Editing);
+        assert_eq!(app.input_buffer, "Initial Task");
+
+        // Modify the title
+        app.input_buffer.clear();
+        for c in "Updated Task".chars() {
+            app.handle_char_input(c);
+        }
+        assert_eq!(app.input_buffer, "Updated Task");
+
+        // Save the edit
+        app.save_edit();
+
+        // Verify the complete workflow
+        assert_eq!(app.input_mode, InputMode::Normal);
+        assert_eq!(app.board.columns[0].tasks[0].title, "Updated Task");
+    }
+
+    #[test]
+    fn test_handle_char_input_in_editing_mode() {
+        let mut app = test_app();
+
+        // Create a task and start editing
+        app.board.add_task(0, "Test".to_string()).unwrap();
+        app.selected_task_index = Some(0);
+        app.start_editing();
+
+        // Clear buffer and add new text
+        app.input_buffer.clear();
+
+        app.handle_char_input('N');
+        app.handle_char_input('e');
+        app.handle_char_input('w');
+
+        assert_eq!(app.input_buffer, "New");
+    }
+
+    #[test]
+    fn test_auto_save_on_edit() {
+        let mut app = test_app();
+        let storage_path = app.storage.file_path().clone();
+
+        // Create and edit a task
+        app.board.add_task(0, "Original".to_string()).unwrap();
+        app.selected_task_index = Some(0);
+        app.start_editing();
+        app.input_buffer = "Edited".to_string();
+        app.save_edit();
+
+        // Verify saved state
+        let loaded = app.storage.load().unwrap().unwrap();
+        assert_eq!(loaded.columns[0].tasks.len(), 1);
+        assert_eq!(loaded.columns[0].tasks[0].title, "Edited");
 
         // Cleanup
         std::fs::remove_file(storage_path).ok();

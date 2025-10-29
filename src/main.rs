@@ -15,7 +15,7 @@ use ratatui::{
 use std::io;
 
 /// Application input mode
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 enum InputMode {
     Normal,
     Creating,
@@ -266,4 +266,257 @@ fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
         .alignment(Alignment::Left);
 
     f.render_widget(paragraph, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_app_initialization() {
+        let app = App::new();
+        assert_eq!(app.selected_column, 0);
+        assert_eq!(app.input_mode, InputMode::Normal);
+        assert_eq!(app.input_buffer, "");
+        assert_eq!(app.board.columns.len(), 3);
+    }
+
+    #[test]
+    fn test_next_column_navigation() {
+        let mut app = App::new();
+
+        // Start at column 0
+        assert_eq!(app.selected_column, 0);
+
+        // Move to column 1
+        app.next_column();
+        assert_eq!(app.selected_column, 1);
+
+        // Move to column 2
+        app.next_column();
+        assert_eq!(app.selected_column, 2);
+
+        // Wrap back to column 0
+        app.next_column();
+        assert_eq!(app.selected_column, 0);
+    }
+
+    #[test]
+    fn test_previous_column_navigation() {
+        let mut app = App::new();
+
+        // Start at column 0, go backwards (should wrap to last column)
+        assert_eq!(app.selected_column, 0);
+        app.previous_column();
+        assert_eq!(app.selected_column, 2);
+
+        // Move back to column 1
+        app.previous_column();
+        assert_eq!(app.selected_column, 1);
+
+        // Move to column 0
+        app.previous_column();
+        assert_eq!(app.selected_column, 0);
+    }
+
+    #[test]
+    fn test_start_creating_task() {
+        let mut app = App::new();
+
+        // Add some text to input buffer to verify it gets cleared
+        app.input_buffer = "old text".to_string();
+
+        app.start_creating();
+
+        assert_eq!(app.input_mode, InputMode::Creating);
+        assert_eq!(app.input_buffer, "");
+    }
+
+    #[test]
+    fn test_create_task_with_input() {
+        let mut app = App::new();
+
+        // Set up creating mode with input
+        app.start_creating();
+        app.input_buffer = "My new task".to_string();
+
+        // Get initial task count
+        let initial_count = app.board.columns[0].tasks.len();
+
+        // Create the task
+        app.create_task();
+
+        // Verify task was added
+        assert_eq!(app.board.columns[0].tasks.len(), initial_count + 1);
+        assert_eq!(
+            app.board.columns[0].tasks[initial_count].title,
+            "My new task"
+        );
+
+        // Verify state reset
+        assert_eq!(app.input_mode, InputMode::Normal);
+        assert_eq!(app.input_buffer, "");
+    }
+
+    #[test]
+    fn test_create_task_with_empty_input() {
+        let mut app = App::new();
+
+        // Set up creating mode with empty input
+        app.start_creating();
+        assert_eq!(app.input_buffer, "");
+
+        let initial_count = app.board.columns[0].tasks.len();
+
+        // Try to create with empty buffer
+        app.create_task();
+
+        // No task should be added
+        assert_eq!(app.board.columns[0].tasks.len(), initial_count);
+
+        // But mode should still switch back to Normal
+        assert_eq!(app.input_mode, InputMode::Normal);
+    }
+
+    #[test]
+    fn test_create_task_in_different_columns() {
+        let mut app = App::new();
+
+        // Create task in column 0
+        app.selected_column = 0;
+        app.start_creating();
+        app.input_buffer = "Task in column 0".to_string();
+        app.create_task();
+        assert_eq!(app.board.columns[0].tasks.len(), 1);
+
+        // Create task in column 1
+        app.selected_column = 1;
+        app.start_creating();
+        app.input_buffer = "Task in column 1".to_string();
+        app.create_task();
+        assert_eq!(app.board.columns[1].tasks.len(), 1);
+
+        // Create task in column 2
+        app.selected_column = 2;
+        app.start_creating();
+        app.input_buffer = "Task in column 2".to_string();
+        app.create_task();
+        assert_eq!(app.board.columns[2].tasks.len(), 1);
+
+        // Verify tasks are in correct columns
+        assert_eq!(app.board.columns[0].tasks[0].title, "Task in column 0");
+        assert_eq!(app.board.columns[1].tasks[0].title, "Task in column 1");
+        assert_eq!(app.board.columns[2].tasks[0].title, "Task in column 2");
+    }
+
+    #[test]
+    fn test_cancel_creating() {
+        let mut app = App::new();
+
+        // Start creating and add some input
+        app.start_creating();
+        app.input_buffer = "Some text".to_string();
+
+        // Cancel
+        app.cancel_creating();
+
+        // Verify state
+        assert_eq!(app.input_mode, InputMode::Normal);
+        assert_eq!(app.input_buffer, "");
+    }
+
+    #[test]
+    fn test_handle_char_input_in_creating_mode() {
+        let mut app = App::new();
+
+        app.start_creating();
+
+        app.handle_char_input('H');
+        app.handle_char_input('e');
+        app.handle_char_input('l');
+        app.handle_char_input('l');
+        app.handle_char_input('o');
+
+        assert_eq!(app.input_buffer, "Hello");
+    }
+
+    #[test]
+    fn test_handle_char_input_in_normal_mode() {
+        let mut app = App::new();
+
+        // Try to input while in Normal mode
+        assert_eq!(app.input_mode, InputMode::Normal);
+
+        app.handle_char_input('H');
+        app.handle_char_input('i');
+
+        // Buffer should remain empty
+        assert_eq!(app.input_buffer, "");
+    }
+
+    #[test]
+    fn test_handle_backspace_in_creating_mode() {
+        let mut app = App::new();
+
+        app.start_creating();
+        app.input_buffer = "Hello World".to_string();
+
+        // Remove 'd'
+        app.handle_backspace();
+        assert_eq!(app.input_buffer, "Hello Worl");
+
+        // Remove 'l'
+        app.handle_backspace();
+        assert_eq!(app.input_buffer, "Hello Wor");
+
+        // Remove all remaining characters
+        for _ in 0..9 {
+            app.handle_backspace();
+        }
+        assert_eq!(app.input_buffer, "");
+
+        // Backspace on empty buffer should not panic
+        app.handle_backspace();
+        assert_eq!(app.input_buffer, "");
+    }
+
+    #[test]
+    fn test_handle_backspace_in_normal_mode() {
+        let mut app = App::new();
+
+        // Set buffer manually and stay in Normal mode
+        app.input_buffer = "Test".to_string();
+        assert_eq!(app.input_mode, InputMode::Normal);
+
+        // Backspace should not affect buffer in Normal mode
+        app.handle_backspace();
+        assert_eq!(app.input_buffer, "Test");
+    }
+
+    #[test]
+    fn test_complete_task_creation_workflow() {
+        let mut app = App::new();
+
+        // Navigate to column 1
+        app.next_column();
+        assert_eq!(app.selected_column, 1);
+
+        // Start creating
+        app.start_creating();
+        assert_eq!(app.input_mode, InputMode::Creating);
+
+        // Type task title
+        for c in "Fix the bug".chars() {
+            app.handle_char_input(c);
+        }
+        assert_eq!(app.input_buffer, "Fix the bug");
+
+        // Create the task
+        app.create_task();
+
+        // Verify
+        assert_eq!(app.input_mode, InputMode::Normal);
+        assert_eq!(app.board.columns[1].tasks.len(), 1);
+        assert_eq!(app.board.columns[1].tasks[0].title, "Fix the bug");
+    }
 }

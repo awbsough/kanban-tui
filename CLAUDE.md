@@ -18,12 +18,9 @@ A Terminal User Interface (TUI) application for managing Kanban boards, written 
 ```
 kanban-tui/
 ├── src/
-│   ├── main.rs          # Application entry point
+│   ├── main.rs          # Application entry point and TUI implementation
 │   ├── lib.rs           # Public library interface
-│   ├── app.rs           # Application state and event handling
-│   ├── ui.rs            # UI rendering logic
-│   ├── models/          # Data models (Board, Column, Task)
-│   └── storage/         # Persistence layer
+│   └── storage.rs       # Persistence layer (JSON storage)
 ├── tests/               # Integration tests
 └── examples/            # Example usage (future)
 ```
@@ -160,7 +157,8 @@ cargo run
 ### Core Dependencies
 - `ratatui`: Terminal UI framework
 - `crossterm`: Cross-platform terminal manipulation
-- `serde` + `serde_json`: Serialization for persistence (future)
+- `serde` + `serde_json`: Serialization for persistence
+- `dirs`: Platform-specific directory paths for config storage
 
 ### Development Dependencies
 - Standard Rust test framework
@@ -176,7 +174,7 @@ cargo run
 - [x] Basic keyboard navigation (h/l or arrow keys, j/k for tasks)
 
 ### Phase 2: Enhanced Features
-- [ ] Persistent storage (JSON file)
+- [x] Persistent storage (JSON file)
 - [ ] Edit task details
 - [ ] Task descriptions and metadata
 - [ ] Color coding and priorities
@@ -192,8 +190,42 @@ cargo run
 1. **TUI Framework**: Using `ratatui` (fork of `tui-rs`) for active maintenance and features
 2. **Terminal Backend**: `crossterm` for cross-platform compatibility
 3. **State Management**: Centralized application state with event-driven updates
-4. **Storage Format**: JSON for human-readable persistence (initial implementation)
-5. **Development Environment**: Nix flakes for reproducibility across machines
+4. **Storage Format**: JSON for human-readable persistence
+5. **Storage Location**: Platform-specific config directory (`~/.config/kanban-tui/board.json` on Linux/macOS, `%APPDATA%\kanban-tui\board.json` on Windows)
+6. **Auto-save**: Board automatically saves after every modification (create, delete, move)
+7. **Auto-load**: Board automatically loads from storage on startup
+8. **Development Environment**: Nix flakes for reproducibility across machines
+
+## Storage Implementation
+
+### Architecture
+The storage module (`src/storage.rs`) provides persistent storage using JSON files:
+
+- **Storage Location**: Uses `dirs` crate to get platform-specific config directory
+  - Linux/macOS: `~/.config/kanban-tui/board.json`
+  - Windows: `%APPDATA%\kanban-tui\board.json`
+- **Auto-save**: Automatically saves after create/delete/move operations
+- **Auto-load**: Loads saved board on application startup
+- **Error Handling**: Gracefully handles missing files (creates new board) and I/O errors
+
+### Usage
+```rust
+use kanban_tui::storage::Storage;
+
+// Create storage with default location
+let storage = Storage::new()?;
+
+// Save board
+storage.save(&board)?;
+
+// Load board (returns None if file doesn't exist)
+let board = storage.load()?.unwrap_or_else(|| Board::new("Default".to_string()));
+
+// Check if storage file exists
+if storage.exists() {
+    println!("Found existing board at: {:?}", storage.file_path());
+}
+```
 
 ## Notes for AI Assistants
 
@@ -202,3 +234,4 @@ cargo run
 - UI code should be separated from business logic for testability
 - Use the provided Nix environment to ensure consistent tooling
 - When adding dependencies, update both `Cargo.toml` and document in this file
+- Storage tests use temporary file paths to avoid interfering with user data

@@ -5,6 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod storage;
+
 /// Represents a single task in the Kanban board
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Task {

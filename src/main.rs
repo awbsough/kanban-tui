@@ -3,7 +3,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use kanban_tui::Board;
+use kanban_tui::{storage::Storage, Board};
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -28,16 +28,34 @@ struct App {
     selected_task_index: Option<usize>,
     input_mode: InputMode,
     input_buffer: String,
+    storage: Storage,
 }
 
 impl App {
     fn new() -> Self {
+        let storage = Storage::new().expect("Failed to initialize storage");
+
+        // Try to load existing board, or create new one
+        let board = storage
+            .load()
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| Board::new("My Kanban Board".to_string()));
+
         Self {
-            board: Board::new("My Kanban Board".to_string()),
+            board,
             selected_column: 0,
             selected_task_index: None,
             input_mode: InputMode::Normal,
             input_buffer: String::new(),
+            storage,
+        }
+    }
+
+    /// Save the board to persistent storage
+    fn save(&self) {
+        if let Err(e) = self.storage.save(&self.board) {
+            eprintln!("Failed to save board: {}", e);
         }
     }
 
@@ -111,6 +129,9 @@ impl App {
                     self.selected_task_index = Some(new_task_count - 1);
                 }
                 // Otherwise keep the same index (which now points to the next task)
+
+                // Save after deletion
+                self.save();
             }
         }
     }
@@ -140,6 +161,9 @@ impl App {
                         .iter()
                         .position(|t| t.id == task_id);
                     self.selected_task_index = new_task_index;
+
+                    // Save after move
+                    self.save();
                 }
             }
         }
@@ -170,6 +194,9 @@ impl App {
                         .iter()
                         .position(|t| t.id == task_id);
                     self.selected_task_index = new_task_index;
+
+                    // Save after move
+                    self.save();
                 }
             }
         }
@@ -190,6 +217,9 @@ impl App {
             if task_count > 0 {
                 self.selected_task_index = Some(task_count - 1);
             }
+
+            // Save after creation
+            self.save();
         }
         self.input_mode = InputMode::Normal;
     }
@@ -444,10 +474,32 @@ fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::env;
+
+    // Helper function to create App with temporary storage for testing
+    fn test_app() -> App {
+        let temp_dir = env::temp_dir();
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let test_file = temp_dir.join(format!("kanban-test-app-{}.json", timestamp));
+        let storage = Storage::with_path(test_file);
+        let board = Board::new("My Kanban Board".to_string());
+
+        App {
+            board,
+            selected_column: 0,
+            selected_task_index: None,
+            input_mode: InputMode::Normal,
+            input_buffer: String::new(),
+            storage,
+        }
+    }
 
     #[test]
     fn test_app_initialization() {
-        let app = App::new();
+        let app = test_app();
         assert_eq!(app.selected_column, 0);
         assert_eq!(app.selected_task_index, None);
         assert_eq!(app.input_mode, InputMode::Normal);
@@ -457,7 +509,7 @@ mod tests {
 
     #[test]
     fn test_next_column_navigation() {
-        let mut app = App::new();
+        let mut app = test_app();
 
         // Start at column 0
         assert_eq!(app.selected_column, 0);
@@ -477,7 +529,7 @@ mod tests {
 
     #[test]
     fn test_previous_column_navigation() {
-        let mut app = App::new();
+        let mut app = test_app();
 
         // Start at column 0, go backwards (should wrap to last column)
         assert_eq!(app.selected_column, 0);
@@ -495,7 +547,7 @@ mod tests {
 
     #[test]
     fn test_start_creating_task() {
-        let mut app = App::new();
+        let mut app = test_app();
 
         // Add some text to input buffer to verify it gets cleared
         app.input_buffer = "old text".to_string();
@@ -508,7 +560,7 @@ mod tests {
 
     #[test]
     fn test_create_task_with_input() {
-        let mut app = App::new();
+        let mut app = test_app();
 
         // Set up creating mode with input
         app.start_creating();
@@ -534,7 +586,7 @@ mod tests {
 
     #[test]
     fn test_create_task_with_empty_input() {
-        let mut app = App::new();
+        let mut app = test_app();
 
         // Set up creating mode with empty input
         app.start_creating();
@@ -554,7 +606,7 @@ mod tests {
 
     #[test]
     fn test_create_task_in_different_columns() {
-        let mut app = App::new();
+        let mut app = test_app();
 
         // Create task in column 0
         app.selected_column = 0;
@@ -585,7 +637,7 @@ mod tests {
 
     #[test]
     fn test_cancel_creating() {
-        let mut app = App::new();
+        let mut app = test_app();
 
         // Start creating and add some input
         app.start_creating();
@@ -601,7 +653,7 @@ mod tests {
 
     #[test]
     fn test_handle_char_input_in_creating_mode() {
-        let mut app = App::new();
+        let mut app = test_app();
 
         app.start_creating();
 
@@ -616,7 +668,7 @@ mod tests {
 
     #[test]
     fn test_handle_char_input_in_normal_mode() {
-        let mut app = App::new();
+        let mut app = test_app();
 
         // Try to input while in Normal mode
         assert_eq!(app.input_mode, InputMode::Normal);
@@ -630,7 +682,7 @@ mod tests {
 
     #[test]
     fn test_handle_backspace_in_creating_mode() {
-        let mut app = App::new();
+        let mut app = test_app();
 
         app.start_creating();
         app.input_buffer = "Hello World".to_string();
@@ -656,7 +708,7 @@ mod tests {
 
     #[test]
     fn test_handle_backspace_in_normal_mode() {
-        let mut app = App::new();
+        let mut app = test_app();
 
         // Set buffer manually and stay in Normal mode
         app.input_buffer = "Test".to_string();
@@ -669,7 +721,7 @@ mod tests {
 
     #[test]
     fn test_complete_task_creation_workflow() {
-        let mut app = App::new();
+        let mut app = test_app();
 
         // Navigate to column 1
         app.next_column();
@@ -696,7 +748,7 @@ mod tests {
 
     #[test]
     fn test_task_selection_auto_updates_on_column_change() {
-        let mut app = App::new();
+        let mut app = test_app();
 
         // Add tasks to columns
         app.board.add_task(0, "Task 1".to_string()).unwrap();
@@ -725,7 +777,7 @@ mod tests {
 
     #[test]
     fn test_next_task_navigation() {
-        let mut app = App::new();
+        let mut app = test_app();
 
         // Add 3 tasks to column 0
         app.board.add_task(0, "Task 1".to_string()).unwrap();
@@ -754,7 +806,7 @@ mod tests {
 
     #[test]
     fn test_previous_task_navigation() {
-        let mut app = App::new();
+        let mut app = test_app();
 
         // Add 3 tasks to column 0
         app.board.add_task(0, "Task 1".to_string()).unwrap();
@@ -783,7 +835,7 @@ mod tests {
 
     #[test]
     fn test_task_navigation_on_empty_column() {
-        let mut app = App::new();
+        let mut app = test_app();
 
         // Column 0 is empty
         assert_eq!(app.board.columns[0].tasks.len(), 0);
@@ -799,7 +851,7 @@ mod tests {
 
     #[test]
     fn test_delete_selected_task() {
-        let mut app = App::new();
+        let mut app = test_app();
 
         // Add 3 tasks
         app.board.add_task(0, "Task 1".to_string()).unwrap();
@@ -822,7 +874,7 @@ mod tests {
 
     #[test]
     fn test_delete_last_task_in_list() {
-        let mut app = App::new();
+        let mut app = test_app();
 
         // Add 3 tasks
         app.board.add_task(0, "Task 1".to_string()).unwrap();
@@ -844,7 +896,7 @@ mod tests {
 
     #[test]
     fn test_delete_only_task() {
-        let mut app = App::new();
+        let mut app = test_app();
 
         // Add one task
         app.board.add_task(0, "Only task".to_string()).unwrap();
@@ -863,7 +915,7 @@ mod tests {
 
     #[test]
     fn test_delete_with_no_selection() {
-        let mut app = App::new();
+        let mut app = test_app();
 
         // Add task
         app.board.add_task(0, "Task 1".to_string()).unwrap();
@@ -880,7 +932,7 @@ mod tests {
 
     #[test]
     fn test_delete_middle_task() {
-        let mut app = App::new();
+        let mut app = test_app();
 
         // Add 3 tasks
         app.board.add_task(0, "Task 1".to_string()).unwrap();
@@ -903,7 +955,7 @@ mod tests {
 
     #[test]
     fn test_create_task_selects_new_task() {
-        let mut app = App::new();
+        let mut app = test_app();
 
         // Create a task
         app.start_creating();
@@ -925,7 +977,7 @@ mod tests {
 
     #[test]
     fn test_complete_deletion_workflow() {
-        let mut app = App::new();
+        let mut app = test_app();
 
         // Create 3 tasks
         for i in 1..=3 {
@@ -960,7 +1012,7 @@ mod tests {
 
     #[test]
     fn test_move_task_right() {
-        let mut app = App::new();
+        let mut app = test_app();
 
         // Add task to column 0
         let task_id = app.board.add_task(0, "My task".to_string()).unwrap();
@@ -983,7 +1035,7 @@ mod tests {
 
     #[test]
     fn test_move_task_left() {
-        let mut app = App::new();
+        let mut app = test_app();
 
         // Add task to column 1
         let task_id = app.board.add_task(1, "My task".to_string()).unwrap();
@@ -1006,7 +1058,7 @@ mod tests {
 
     #[test]
     fn test_move_task_cannot_move_left_from_first_column() {
-        let mut app = App::new();
+        let mut app = test_app();
 
         // Add task to column 0
         app.board.add_task(0, "Task".to_string()).unwrap();
@@ -1023,7 +1075,7 @@ mod tests {
 
     #[test]
     fn test_move_task_cannot_move_right_from_last_column() {
-        let mut app = App::new();
+        let mut app = test_app();
 
         // Add task to last column (column 2)
         app.board.add_task(2, "Task".to_string()).unwrap();
@@ -1040,7 +1092,7 @@ mod tests {
 
     #[test]
     fn test_move_task_with_no_selection() {
-        let mut app = App::new();
+        let mut app = test_app();
 
         // Add task but don't select it
         app.board.add_task(0, "Task".to_string()).unwrap();
@@ -1057,7 +1109,7 @@ mod tests {
 
     #[test]
     fn test_move_task_through_all_columns() {
-        let mut app = App::new();
+        let mut app = test_app();
 
         // Add task to column 0
         let task_id = app.board.add_task(0, "Traveling task".to_string()).unwrap();
@@ -1095,7 +1147,7 @@ mod tests {
 
     #[test]
     fn test_move_task_to_column_with_existing_tasks() {
-        let mut app = App::new();
+        let mut app = test_app();
 
         // Add multiple tasks to column 1
         app.board.add_task(1, "Existing 1".to_string()).unwrap();
@@ -1121,7 +1173,7 @@ mod tests {
 
     #[test]
     fn test_complete_kanban_workflow() {
-        let mut app = App::new();
+        let mut app = test_app();
 
         // Create a task in "To Do" column (column 0)
         app.selected_column = 0;
@@ -1148,5 +1200,97 @@ mod tests {
 
         // Task is complete!
         assert_eq!(app.board.columns[2].tasks[0].title, "Implement feature");
+    }
+
+    #[test]
+    fn test_storage_persistence() {
+        let temp_dir = env::temp_dir();
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let test_file = temp_dir.join(format!("kanban-test-persist-{}.json", timestamp));
+        let storage = Storage::with_path(test_file.clone());
+
+        // Create board and add tasks
+        let mut board = Board::new("Test Board".to_string());
+        board.add_task(0, "Task 1".to_string()).unwrap();
+        board.add_task(1, "Task 2".to_string()).unwrap();
+
+        // Save to storage
+        storage.save(&board).unwrap();
+
+        // Load from storage
+        let loaded = storage.load().unwrap();
+        assert!(loaded.is_some());
+        let loaded_board = loaded.unwrap();
+
+        // Verify
+        assert_eq!(loaded_board.name, "Test Board");
+        assert_eq!(loaded_board.columns[0].tasks.len(), 1);
+        assert_eq!(loaded_board.columns[0].tasks[0].title, "Task 1");
+        assert_eq!(loaded_board.columns[1].tasks.len(), 1);
+        assert_eq!(loaded_board.columns[1].tasks[0].title, "Task 2");
+
+        // Cleanup
+        std::fs::remove_file(test_file).ok();
+    }
+
+    #[test]
+    fn test_auto_save_on_create() {
+        let mut app = test_app();
+        let storage_path = app.storage.file_path().clone();
+
+        // Create a task
+        app.start_creating();
+        app.input_buffer = "Auto-saved task".to_string();
+        app.create_task();
+
+        // Load from storage to verify it was saved
+        let loaded = app.storage.load().unwrap().unwrap();
+        assert_eq!(loaded.columns[0].tasks.len(), 1);
+        assert_eq!(loaded.columns[0].tasks[0].title, "Auto-saved task");
+
+        // Cleanup
+        std::fs::remove_file(storage_path).ok();
+    }
+
+    #[test]
+    fn test_auto_save_on_delete() {
+        let mut app = test_app();
+        let storage_path = app.storage.file_path().clone();
+
+        // Create and then delete a task
+        app.board.add_task(0, "To be deleted".to_string()).unwrap();
+        app.selected_task_index = Some(0);
+        app.delete_selected_task();
+
+        // Verify saved state
+        let loaded = app.storage.load().unwrap().unwrap();
+        assert_eq!(loaded.columns[0].tasks.len(), 0);
+
+        // Cleanup
+        std::fs::remove_file(storage_path).ok();
+    }
+
+    #[test]
+    fn test_auto_save_on_move() {
+        let mut app = test_app();
+        let storage_path = app.storage.file_path().clone();
+
+        // Create task and move it
+        app.board.add_task(0, "Moving task".to_string()).unwrap();
+        app.selected_column = 0;
+        app.selected_task_index = Some(0);
+        app.move_task_right();
+
+        // Verify saved state
+        let loaded = app.storage.load().unwrap().unwrap();
+        assert_eq!(loaded.columns[0].tasks.len(), 0);
+        assert_eq!(loaded.columns[1].tasks.len(), 1);
+        assert_eq!(loaded.columns[1].tasks[0].title, "Moving task");
+
+        // Cleanup
+        std::fs::remove_file(storage_path).ok();
     }
 }

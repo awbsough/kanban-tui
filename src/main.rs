@@ -115,6 +115,66 @@ impl App {
         }
     }
 
+    fn move_task_left(&mut self) {
+        // Can't move left from first column
+        if self.selected_column == 0 {
+            return;
+        }
+
+        if let Some(task_idx) = self.selected_task_index {
+            let column = &self.board.columns[self.selected_column];
+
+            if task_idx < column.tasks.len() {
+                let task_id = column.tasks[task_idx].id;
+                let from_column = self.selected_column;
+                let to_column = self.selected_column - 1;
+
+                // Move the task
+                if self.board.move_task(from_column, to_column, task_id).is_ok() {
+                    // Update selected column
+                    self.selected_column = to_column;
+
+                    // Find the moved task in the new column and select it
+                    let new_task_index = self.board.columns[to_column]
+                        .tasks
+                        .iter()
+                        .position(|t| t.id == task_id);
+                    self.selected_task_index = new_task_index;
+                }
+            }
+        }
+    }
+
+    fn move_task_right(&mut self) {
+        // Can't move right from last column
+        if self.selected_column >= self.board.columns.len() - 1 {
+            return;
+        }
+
+        if let Some(task_idx) = self.selected_task_index {
+            let column = &self.board.columns[self.selected_column];
+
+            if task_idx < column.tasks.len() {
+                let task_id = column.tasks[task_idx].id;
+                let from_column = self.selected_column;
+                let to_column = self.selected_column + 1;
+
+                // Move the task
+                if self.board.move_task(from_column, to_column, task_id).is_ok() {
+                    // Update selected column
+                    self.selected_column = to_column;
+
+                    // Find the moved task in the new column and select it
+                    let new_task_index = self.board.columns[to_column]
+                        .tasks
+                        .iter()
+                        .position(|t| t.id == task_id);
+                    self.selected_task_index = new_task_index;
+                }
+            }
+        }
+    }
+
     fn start_creating(&mut self) {
         self.input_mode = InputMode::Creating;
         self.input_buffer.clear();
@@ -196,8 +256,22 @@ fn run_app<B: ratatui::backend::Backend>(
                     InputMode::Normal => match key.code {
                         KeyCode::Char('q') => return Ok(()),
                         KeyCode::Char('n') => app.start_creating(),
-                        KeyCode::Char('h') | KeyCode::Left => app.previous_column(),
-                        KeyCode::Char('l') | KeyCode::Right => app.next_column(),
+                        KeyCode::Char('h') | KeyCode::Left => {
+                            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                                app.move_task_left();
+                            } else {
+                                app.previous_column();
+                            }
+                        }
+                        KeyCode::Char('l') | KeyCode::Right => {
+                            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                                app.move_task_right();
+                            } else {
+                                app.next_column();
+                            }
+                        }
+                        KeyCode::Char('H') => app.move_task_left(),
+                        KeyCode::Char('L') => app.move_task_right(),
                         KeyCode::Char('j') | KeyCode::Down => app.next_task(),
                         KeyCode::Char('k') | KeyCode::Up => app.previous_task(),
                         KeyCode::Char('d') => app.delete_selected_task(),
@@ -324,15 +398,13 @@ fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
         InputMode::Normal => {
             let help = vec![
                 Span::styled("n", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": new task | "),
+                Span::raw(": new | "),
                 Span::styled("h/l", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(" or "),
-                Span::styled("←/→", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(": columns | "),
                 Span::styled("j/k", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(" or "),
-                Span::styled("↑/↓", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(": tasks | "),
+                Span::styled("Shift+h/l", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": move | "),
                 Span::styled("d", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(": delete | "),
                 Span::styled("q", Style::default().add_modifier(Modifier::BOLD)),
@@ -884,5 +956,197 @@ mod tests {
         app.delete_selected_task();
         assert_eq!(app.board.columns[0].tasks.len(), 0);
         assert_eq!(app.selected_task_index, None);
+    }
+
+    #[test]
+    fn test_move_task_right() {
+        let mut app = App::new();
+
+        // Add task to column 0
+        let task_id = app.board.add_task(0, "My task".to_string()).unwrap();
+        app.selected_column = 0;
+        app.selected_task_index = Some(0);
+
+        // Move task to column 1
+        app.move_task_right();
+
+        // Verify task moved
+        assert_eq!(app.board.columns[0].tasks.len(), 0);
+        assert_eq!(app.board.columns[1].tasks.len(), 1);
+        assert_eq!(app.board.columns[1].tasks[0].title, "My task");
+        assert_eq!(app.board.columns[1].tasks[0].id, task_id);
+
+        // Verify selection followed task
+        assert_eq!(app.selected_column, 1);
+        assert_eq!(app.selected_task_index, Some(0));
+    }
+
+    #[test]
+    fn test_move_task_left() {
+        let mut app = App::new();
+
+        // Add task to column 1
+        let task_id = app.board.add_task(1, "My task".to_string()).unwrap();
+        app.selected_column = 1;
+        app.selected_task_index = Some(0);
+
+        // Move task to column 0
+        app.move_task_left();
+
+        // Verify task moved
+        assert_eq!(app.board.columns[1].tasks.len(), 0);
+        assert_eq!(app.board.columns[0].tasks.len(), 1);
+        assert_eq!(app.board.columns[0].tasks[0].title, "My task");
+        assert_eq!(app.board.columns[0].tasks[0].id, task_id);
+
+        // Verify selection followed task
+        assert_eq!(app.selected_column, 0);
+        assert_eq!(app.selected_task_index, Some(0));
+    }
+
+    #[test]
+    fn test_move_task_cannot_move_left_from_first_column() {
+        let mut app = App::new();
+
+        // Add task to column 0
+        app.board.add_task(0, "Task".to_string()).unwrap();
+        app.selected_column = 0;
+        app.selected_task_index = Some(0);
+
+        // Try to move left from first column
+        app.move_task_left();
+
+        // Task should still be in column 0
+        assert_eq!(app.board.columns[0].tasks.len(), 1);
+        assert_eq!(app.selected_column, 0);
+    }
+
+    #[test]
+    fn test_move_task_cannot_move_right_from_last_column() {
+        let mut app = App::new();
+
+        // Add task to last column (column 2)
+        app.board.add_task(2, "Task".to_string()).unwrap();
+        app.selected_column = 2;
+        app.selected_task_index = Some(0);
+
+        // Try to move right from last column
+        app.move_task_right();
+
+        // Task should still be in column 2
+        assert_eq!(app.board.columns[2].tasks.len(), 1);
+        assert_eq!(app.selected_column, 2);
+    }
+
+    #[test]
+    fn test_move_task_with_no_selection() {
+        let mut app = App::new();
+
+        // Add task but don't select it
+        app.board.add_task(0, "Task".to_string()).unwrap();
+        app.selected_column = 0;
+        app.selected_task_index = None;
+
+        // Try to move
+        app.move_task_right();
+
+        // Task should still be in column 0
+        assert_eq!(app.board.columns[0].tasks.len(), 1);
+        assert_eq!(app.board.columns[1].tasks.len(), 0);
+    }
+
+    #[test]
+    fn test_move_task_through_all_columns() {
+        let mut app = App::new();
+
+        // Add task to column 0
+        let task_id = app.board.add_task(0, "Traveling task".to_string()).unwrap();
+        app.selected_column = 0;
+        app.selected_task_index = Some(0);
+
+        // Move from column 0 to 1
+        app.move_task_right();
+        assert_eq!(app.selected_column, 1);
+        assert_eq!(app.board.columns[0].tasks.len(), 0);
+        assert_eq!(app.board.columns[1].tasks.len(), 1);
+        assert_eq!(app.board.columns[1].tasks[0].id, task_id);
+
+        // Move from column 1 to 2
+        app.move_task_right();
+        assert_eq!(app.selected_column, 2);
+        assert_eq!(app.board.columns[1].tasks.len(), 0);
+        assert_eq!(app.board.columns[2].tasks.len(), 1);
+        assert_eq!(app.board.columns[2].tasks[0].id, task_id);
+
+        // Move from column 2 to 1
+        app.move_task_left();
+        assert_eq!(app.selected_column, 1);
+        assert_eq!(app.board.columns[2].tasks.len(), 0);
+        assert_eq!(app.board.columns[1].tasks.len(), 1);
+        assert_eq!(app.board.columns[1].tasks[0].id, task_id);
+
+        // Move from column 1 to 0
+        app.move_task_left();
+        assert_eq!(app.selected_column, 0);
+        assert_eq!(app.board.columns[1].tasks.len(), 0);
+        assert_eq!(app.board.columns[0].tasks.len(), 1);
+        assert_eq!(app.board.columns[0].tasks[0].id, task_id);
+    }
+
+    #[test]
+    fn test_move_task_to_column_with_existing_tasks() {
+        let mut app = App::new();
+
+        // Add multiple tasks to column 1
+        app.board.add_task(1, "Existing 1".to_string()).unwrap();
+        app.board.add_task(1, "Existing 2".to_string()).unwrap();
+
+        // Add task to column 0 and select it
+        let task_id = app.board.add_task(0, "Moving task".to_string()).unwrap();
+        app.selected_column = 0;
+        app.selected_task_index = Some(0);
+
+        // Move to column 1 (which already has tasks)
+        app.move_task_right();
+
+        // Verify task was added to column 1
+        assert_eq!(app.board.columns[1].tasks.len(), 3);
+        assert_eq!(app.board.columns[1].tasks[2].title, "Moving task");
+        assert_eq!(app.board.columns[1].tasks[2].id, task_id);
+
+        // Verify selection
+        assert_eq!(app.selected_column, 1);
+        assert_eq!(app.selected_task_index, Some(2)); // Should be at end
+    }
+
+    #[test]
+    fn test_complete_kanban_workflow() {
+        let mut app = App::new();
+
+        // Create a task in "To Do" column (column 0)
+        app.selected_column = 0;
+        app.start_creating();
+        app.input_buffer = "Implement feature".to_string();
+        app.create_task();
+
+        assert_eq!(app.board.columns[0].tasks.len(), 1);
+        assert_eq!(app.selected_task_index, Some(0));
+
+        // Move to "In Progress" (column 1)
+        app.move_task_right();
+        assert_eq!(app.selected_column, 1);
+        assert_eq!(app.board.columns[0].tasks.len(), 0);
+        assert_eq!(app.board.columns[1].tasks.len(), 1);
+        assert_eq!(app.board.columns[1].tasks[0].title, "Implement feature");
+
+        // Move to "Done" (column 2)
+        app.move_task_right();
+        assert_eq!(app.selected_column, 2);
+        assert_eq!(app.board.columns[1].tasks.len(), 0);
+        assert_eq!(app.board.columns[2].tasks.len(), 1);
+        assert_eq!(app.board.columns[2].tasks[0].title, "Implement feature");
+
+        // Task is complete!
+        assert_eq!(app.board.columns[2].tasks[0].title, "Implement feature");
     }
 }

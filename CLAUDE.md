@@ -176,8 +176,8 @@ cargo run
 ### Phase 2: Enhanced Features
 - [x] Persistent storage (JSON file)
 - [x] Edit task details (title editing with 'e' key)
-- [ ] Task descriptions and metadata
-- [ ] Color coding and priorities
+- [x] Task descriptions and metadata
+- [x] Color coding and priorities
 
 ### Phase 3: Advanced Features
 - [ ] Multiple boards

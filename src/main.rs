@@ -3,13 +3,13 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use kanban_tui::{storage::Storage, Board};
+use kanban_tui::{storage::Storage, Board, Priority};
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
     Frame, Terminal,
 };
 use std::io;
@@ -20,6 +20,9 @@ enum InputMode {
     Normal,
     Creating,
     Editing,
+    Viewing,
+    EditingDescription,
+    AddingTag,
 }
 
 /// Application state
@@ -270,15 +273,105 @@ impl App {
     }
 
     fn handle_char_input(&mut self, c: char) {
-        if self.input_mode == InputMode::Creating || self.input_mode == InputMode::Editing {
+        if self.input_mode == InputMode::Creating
+            || self.input_mode == InputMode::Editing
+            || self.input_mode == InputMode::EditingDescription
+            || self.input_mode == InputMode::AddingTag {
             self.input_buffer.push(c);
         }
     }
 
     fn handle_backspace(&mut self) {
-        if self.input_mode == InputMode::Creating || self.input_mode == InputMode::Editing {
+        if self.input_mode == InputMode::Creating
+            || self.input_mode == InputMode::Editing
+            || self.input_mode == InputMode::EditingDescription
+            || self.input_mode == InputMode::AddingTag {
             self.input_buffer.pop();
         }
+    }
+
+    fn start_viewing(&mut self) {
+        if self.selected_task_index.is_some() {
+            self.input_mode = InputMode::Viewing;
+        }
+    }
+
+    fn stop_viewing(&mut self) {
+        self.input_mode = InputMode::Normal;
+    }
+
+    fn cycle_priority(&mut self) {
+        if let Some(task_idx) = self.selected_task_index {
+            let column = &self.board.columns[self.selected_column];
+            if task_idx < column.tasks.len() {
+                let task_id = column.tasks[task_idx].id;
+                let _ = self.board.cycle_task_priority(self.selected_column, task_id);
+                self.save();
+            }
+        }
+    }
+
+    fn start_editing_description(&mut self) {
+        if let Some(task_idx) = self.selected_task_index {
+            let column = &self.board.columns[self.selected_column];
+            if task_idx < column.tasks.len() {
+                let task = &column.tasks[task_idx];
+                self.editing_task_id = Some(task.id);
+                self.input_buffer = task.description.clone().unwrap_or_default();
+                self.input_mode = InputMode::EditingDescription;
+            }
+        }
+    }
+
+    fn save_description(&mut self) {
+        if let Some(task_id) = self.editing_task_id {
+            let _ = self.board.update_task_description(
+                self.selected_column,
+                task_id,
+                &self.input_buffer,
+            );
+            self.save();
+        }
+        self.input_mode = InputMode::Normal;
+        self.input_buffer.clear();
+        self.editing_task_id = None;
+    }
+
+    fn cancel_editing_description(&mut self) {
+        self.input_mode = InputMode::Normal;
+        self.input_buffer.clear();
+        self.editing_task_id = None;
+    }
+
+    fn start_adding_tag(&mut self) {
+        if self.selected_task_index.is_some() {
+            self.input_mode = InputMode::AddingTag;
+            self.input_buffer.clear();
+        }
+    }
+
+    fn add_tag(&mut self) {
+        if let Some(task_idx) = self.selected_task_index {
+            if !self.input_buffer.is_empty() {
+                let column = &self.board.columns[self.selected_column];
+                if task_idx < column.tasks.len() {
+                    let task_id = column.tasks[task_idx].id;
+                    let _ = self.board.add_task_tag(
+                        self.selected_column,
+                        task_id,
+                        &self.input_buffer,
+                    );
+                    self.save();
+                }
+            }
+        }
+        self.input_mode = InputMode::Normal;
+        self.input_buffer.clear();
+    }
+
+    fn cancel_adding_tag(&mut self) {
+        self.input_mode = InputMode::Normal;
+        self.input_buffer.clear();
     }
 }
 
@@ -327,6 +420,10 @@ fn run_app<B: ratatui::backend::Backend>(
                         KeyCode::Char('q') => return Ok(()),
                         KeyCode::Char('n') => app.start_creating(),
                         KeyCode::Char('e') => app.start_editing(),
+                        KeyCode::Char('i') | KeyCode::Enter => app.start_viewing(),
+                        KeyCode::Char('p') => app.cycle_priority(),
+                        KeyCode::Char('D') => app.start_editing_description(),
+                        KeyCode::Char('t') => app.start_adding_tag(),
                         KeyCode::Char('h') | KeyCode::Left => {
                             if key.modifiers.contains(KeyModifiers::SHIFT) {
                                 app.move_task_left();
@@ -380,6 +477,42 @@ fn run_app<B: ratatui::backend::Backend>(
                         KeyCode::Backspace => app.handle_backspace(),
                         _ => {}
                     },
+                    InputMode::Viewing => match key.code {
+                        KeyCode::Esc | KeyCode::Char('i') | KeyCode::Enter | KeyCode::Char('q') => app.stop_viewing(),
+                        _ => {}
+                    },
+                    InputMode::EditingDescription => match key.code {
+                        KeyCode::Enter => app.save_description(),
+                        KeyCode::Esc => app.cancel_editing_description(),
+                        KeyCode::Char(c) => {
+                            if key.modifiers.contains(KeyModifiers::CONTROL) {
+                                // Allow Ctrl+C to quit
+                                if c == 'c' {
+                                    return Ok(());
+                                }
+                            } else {
+                                app.handle_char_input(c);
+                            }
+                        }
+                        KeyCode::Backspace => app.handle_backspace(),
+                        _ => {}
+                    },
+                    InputMode::AddingTag => match key.code {
+                        KeyCode::Enter => app.add_tag(),
+                        KeyCode::Esc => app.cancel_adding_tag(),
+                        KeyCode::Char(c) => {
+                            if key.modifiers.contains(KeyModifiers::CONTROL) {
+                                // Allow Ctrl+C to quit
+                                if c == 'c' {
+                                    return Ok(());
+                                }
+                            } else {
+                                app.handle_char_input(c);
+                            }
+                        }
+                        KeyCode::Backspace => app.handle_backspace(),
+                        _ => {}
+                    },
                 }
             }
         }
@@ -400,6 +533,11 @@ fn ui(f: &mut Frame, app: &App) {
 
     // Render status bar
     render_status_bar(f, app, chunks[1]);
+
+    // Render task detail popup if in viewing mode
+    if app.input_mode == InputMode::Viewing {
+        render_task_detail(f, app, size);
+    }
 }
 
 fn render_columns(f: &mut Frame, app: &App, area: Rect) {
@@ -460,16 +598,39 @@ fn render_column(
         .iter()
         .enumerate()
         .map(|(idx, task)| {
-            let content = format!("{}. {}", idx + 1, task.title);
+            // Build task display with priority and tags
+            let priority_symbol = task.priority.symbol();
+            let priority_str = if !priority_symbol.is_empty() {
+                format!("{} ", priority_symbol)
+            } else {
+                String::new()
+            };
+
+            let tag_indicator = if !task.tags.is_empty() {
+                format!(" [tags: {}]", task.tags.len())
+            } else {
+                String::new()
+            };
+
+            let content = format!("{}. {}{}{}", idx + 1, priority_str, task.title, tag_indicator);
             let is_selected_task = selected_task_index == Some(idx);
+
+            // Determine color based on priority
+            let priority_color = match task.priority {
+                Priority::High => Color::Red,
+                Priority::Medium => Color::Yellow,
+                Priority::Low => Color::Green,
+                Priority::None => Color::White,
+            };
 
             let style = if is_selected_task {
                 Style::default()
-                    .bg(Color::Yellow)
+                    .bg(Color::Cyan)
                     .fg(Color::Black)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::White)
+                Style::default()
+                    .fg(priority_color)
             };
 
             ListItem::new(content).style(style)
@@ -480,20 +641,135 @@ fn render_column(
     f.render_widget(list, area);
 }
 
+fn render_task_detail(f: &mut Frame, app: &App, area: Rect) {
+    if let Some(task_idx) = app.selected_task_index {
+        let column = &app.board.columns[app.selected_column];
+        if task_idx < column.tasks.len() {
+            let task = &column.tasks[task_idx];
+
+            // Create centered popup area
+            let popup_width = 60.min(area.width - 4);
+            let popup_height = 20.min(area.height - 4);
+            let popup_x = (area.width.saturating_sub(popup_width)) / 2;
+            let popup_y = (area.height.saturating_sub(popup_height)) / 2;
+
+            let popup_area = Rect {
+                x: area.x + popup_x,
+                y: area.y + popup_y,
+                width: popup_width,
+                height: popup_height,
+            };
+
+            // Build content lines
+            let mut lines = vec![
+                Line::from(vec![
+                    Span::styled("Title: ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw(&task.title),
+                ]),
+                Line::from(""),
+            ];
+
+            // Description
+            if let Some(desc) = &task.description {
+                if !desc.is_empty() {
+                    lines.push(Line::from(vec![
+                        Span::styled("Description: ", Style::default().add_modifier(Modifier::BOLD)),
+                    ]));
+                    lines.push(Line::from(desc.as_str()));
+                    lines.push(Line::from(""));
+                }
+            } else {
+                lines.push(Line::from(vec![
+                    Span::styled("Description: ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled("(none)", Style::default().fg(Color::Gray)),
+                ]));
+                lines.push(Line::from(""));
+            }
+
+            // Priority with color coding
+            let priority_color = match task.priority {
+                Priority::High => Color::Red,
+                Priority::Medium => Color::Yellow,
+                Priority::Low => Color::Green,
+                Priority::None => Color::Gray,
+            };
+            lines.push(Line::from(vec![
+                Span::styled("Priority: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!("{} {}", task.priority.symbol(), task.priority),
+                    Style::default().fg(priority_color).add_modifier(Modifier::BOLD)
+                ),
+            ]));
+            lines.push(Line::from(""));
+
+            // Tags with color coding
+            if !task.tags.is_empty() {
+                lines.push(Line::from(vec![
+                    Span::styled("Tags: ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        task.tags.join(", "),
+                        Style::default().fg(Color::Cyan)
+                    ),
+                ]));
+            } else {
+                lines.push(Line::from(vec![
+                    Span::styled("Tags: ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::styled("(none)", Style::default().fg(Color::Gray)),
+                ]));
+            }
+            lines.push(Line::from(""));
+
+            // Timestamps
+            lines.push(Line::from(vec![
+                Span::styled("Created: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(&task.created_at),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("Updated: ", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(&task.updated_at),
+            ]));
+
+            // Due date
+            if let Some(due) = &task.due_date {
+                lines.push(Line::from(""));
+                lines.push(Line::from(vec![
+                    Span::styled("Due Date: ", Style::default().add_modifier(Modifier::BOLD)),
+                    Span::raw(due),
+                ]));
+            }
+
+            // Clear the area and render popup
+            f.render_widget(Clear, popup_area);
+            let paragraph = Paragraph::new(lines)
+                .block(
+                    Block::default()
+                        .title(" Task Details (press Esc to close) ")
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::Cyan))
+                )
+                .wrap(Wrap { trim: true });
+
+            f.render_widget(paragraph, popup_area);
+        }
+    }
+}
+
 fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
     let (text, style) = match app.input_mode {
         InputMode::Normal => {
             let help = vec![
                 Span::styled("n", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(": new | "),
+                Span::styled("i", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": view | "),
                 Span::styled("e", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": edit | "),
-                Span::styled("h/l", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": columns | "),
-                Span::styled("j/k", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": tasks | "),
-                Span::styled("Shift+h/l", Style::default().add_modifier(Modifier::BOLD)),
-                Span::raw(": move | "),
+                Span::raw(": edit title | "),
+                Span::styled("D", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": desc | "),
+                Span::styled("p", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": priority | "),
+                Span::styled("t", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(": tag | "),
                 Span::styled("d", Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(": delete | "),
                 Span::styled("q", Style::default().add_modifier(Modifier::BOLD)),
@@ -523,7 +799,7 @@ fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
         InputMode::Editing => {
             let prompt = vec![
                 Span::styled(
-                    "Editing task: ",
+                    "Editing title: ",
                     Style::default().add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(&app.input_buffer),
@@ -537,6 +813,56 @@ fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
             (
                 Line::from(prompt),
                 Style::default().fg(Color::Green),
+            )
+        }
+        InputMode::Viewing => {
+            let help = vec![
+                Span::styled(
+                    "Viewing task details",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" | Press "),
+                Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(" to close"),
+            ];
+            (Line::from(help), Style::default().fg(Color::Cyan))
+        }
+        InputMode::EditingDescription => {
+            let prompt = vec![
+                Span::styled(
+                    "Editing description: ",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(&app.input_buffer),
+                Span::styled("█", Style::default().fg(Color::Cyan)),
+                Span::raw(" | "),
+                Span::styled("Enter", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(" to save | "),
+                Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(" to cancel"),
+            ];
+            (
+                Line::from(prompt),
+                Style::default().fg(Color::Magenta),
+            )
+        }
+        InputMode::AddingTag => {
+            let prompt = vec![
+                Span::styled(
+                    "Adding tag: ",
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(&app.input_buffer),
+                Span::styled("█", Style::default().fg(Color::Cyan)),
+                Span::raw(" | "),
+                Span::styled("Enter", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(" to add | "),
+                Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(" to cancel"),
+            ];
+            (
+                Line::from(prompt),
+                Style::default().fg(Color::Blue),
             )
         }
     };

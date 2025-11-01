@@ -1,11 +1,13 @@
 [package]
 name = "kanban-tui"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-authors = ["Your Name <you@example.com>"]
+authors = "Luke Light"
 description = "A terminal user interface for managing Kanban boards"
 license = "MIT"
-repository = "https://github.com/yourusername/kanban-tui"
+repository = ""
+keywords = ["kanban", "tui", "terminal", "task-management", "productivity"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 ratatui = "0.28"
@@ -13,6 +15,7 @@ crossterm = "0.28"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 dirs = "5.0"
+chrono = "0.4.42"
 
 [dev-dependencies]
 # Test dependencies can be added here as needed

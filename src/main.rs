@@ -42,7 +42,7 @@ impl App {
             .load()
             .ok()
             .flatten()
-            .unwrap_or_else(|| Board::new("My Kanban Board".to_string()));
+            .unwrap_or_else(|| Board::new("My Kanban Board"));
 
         Self {
             board,
@@ -212,7 +212,7 @@ impl App {
 
     fn create_task(&mut self) {
         if !self.input_buffer.is_empty() {
-            let _ = self.board.add_task(self.selected_column, self.input_buffer.clone());
+            let _ = self.board.add_task(self.selected_column, &self.input_buffer);
             self.input_buffer.clear();
 
             // Select the newly created task (last one in the column)
@@ -250,7 +250,7 @@ impl App {
                 let _ = self.board.update_task_title(
                     self.selected_column,
                     task_id,
-                    self.input_buffer.clone(),
+                    &self.input_buffer,
                 );
 
                 // Save after editing
@@ -563,7 +563,7 @@ mod tests {
             .as_nanos();
         let test_file = temp_dir.join(format!("kanban-test-app-{}.json", timestamp));
         let storage = Storage::with_path(test_file);
-        let board = Board::new("My Kanban Board".to_string());
+        let board = Board::new("My Kanban Board");
 
         App {
             board,
@@ -830,8 +830,8 @@ mod tests {
         let mut app = test_app();
 
         // Add tasks to columns
-        app.board.add_task(0, "Task 1".to_string()).unwrap();
-        app.board.add_task(1, "Task 2".to_string()).unwrap();
+        app.board.add_task(0, "Task 1").unwrap();
+        app.board.add_task(1, "Task 2").unwrap();
 
         // Initially on column 0 with no selection
         assert_eq!(app.selected_column, 0);

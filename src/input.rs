@@ -12,6 +12,8 @@ pub fn handle_key_event(app: &mut App, key: KeyEvent) -> bool {
         InputMode::Viewing => handle_viewing_mode(app, key),
         InputMode::EditingDescription => handle_editing_description_mode(app, key),
         InputMode::AddingTag => handle_adding_tag_mode(app, key),
+        InputMode::SelectingBoard => handle_selecting_board_mode(app, key),
+        InputMode::CreatingBoard => handle_creating_board_mode(app, key),
     }
 }
 
@@ -24,6 +26,8 @@ fn handle_normal_mode(app: &mut App, key: KeyEvent) -> bool {
         KeyCode::Char('p') => app.cycle_priority(),
         KeyCode::Char('D') => app.start_editing_description(),
         KeyCode::Char('t') => app.start_adding_tag(),
+        KeyCode::Char('b') => app.start_board_selection(),
+        KeyCode::Char('B') => app.start_creating_board(),
         KeyCode::Char('h') | KeyCode::Left => {
             if key.modifiers.contains(KeyModifiers::SHIFT) {
                 app.move_task_left();
@@ -110,6 +114,38 @@ fn handle_adding_tag_mode(app: &mut App, key: KeyEvent) -> bool {
     match key.code {
         KeyCode::Enter => app.add_tag(),
         KeyCode::Esc => app.cancel_adding_tag(),
+        KeyCode::Char(c) => {
+            if key.modifiers.contains(KeyModifiers::CONTROL) && c == 'c' {
+                return true; // Quit on Ctrl+C
+            }
+            app.handle_char_input(c);
+        }
+        KeyCode::Backspace => app.handle_backspace(),
+        _ => {}
+    }
+    false
+}
+
+fn handle_selecting_board_mode(app: &mut App, key: KeyEvent) -> bool {
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => app.cancel_board_selection(),
+        KeyCode::Enter => app.switch_to_selected_board(),
+        KeyCode::Char('j') | KeyCode::Down => app.next_board_in_list(),
+        KeyCode::Char('k') | KeyCode::Up => app.previous_board_in_list(),
+        KeyCode::Char('d') => app.delete_selected_board(),
+        KeyCode::Char('n') | KeyCode::Char('B') => {
+            app.cancel_board_selection();
+            app.start_creating_board();
+        }
+        _ => {}
+    }
+    false
+}
+
+fn handle_creating_board_mode(app: &mut App, key: KeyEvent) -> bool {
+    match key.code {
+        KeyCode::Enter => app.create_new_board(),
+        KeyCode::Esc => app.cancel_creating_board(),
         KeyCode::Char(c) => {
             if key.modifiers.contains(KeyModifiers::CONTROL) && c == 'c' {
                 return true; // Quit on Ctrl+C

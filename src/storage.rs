@@ -1,29 +1,10 @@
 //! Persistent storage for Kanban boards.
 //!
-//! This module provides functionality to save and load boards from JSON files
+//! This module provides functionality to save and load multiple boards from JSON files
 //! stored in platform-specific configuration directories.
-//!
-//! # Examples
-//!
-//! ```rust,no_run
-//! use kanban_tui::{Board, storage::Storage};
-//!
-//! // Create storage with default location
-//! let storage = Storage::new().expect("Failed to initialize storage");
-//!
-//! // Create a board
-//! let mut board = Board::new("My Project".to_string());
-//! board.add_task(0, "Task 1".to_string()).unwrap();
-//!
-//! // Save the board
-//! storage.save(&board).expect("Failed to save");
-//!
-//! // Load the board
-//! let loaded = storage.load().expect("Failed to load");
-//! assert!(loaded.is_some());
-//! ```
 
 use crate::Board;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
 use std::path::PathBuf;
@@ -34,6 +15,7 @@ pub enum StorageError {
     Io(io::Error),
     Serialization(serde_json::Error),
     ConfigDirNotFound,
+    BoardNotFound(String),
 }
 
 impl From<io::Error> for StorageError {
@@ -54,164 +36,244 @@ impl std::fmt::Display for StorageError {
             StorageError::Io(err) => write!(f, "IO error: {}", err),
             StorageError::Serialization(err) => write!(f, "Serialization error: {}", err),
             StorageError::ConfigDirNotFound => write!(f, "Could not find config directory"),
+            StorageError::BoardNotFound(name) => write!(f, "Board not found: {}", name),
         }
     }
 }
 
 impl std::error::Error for StorageError {}
 
-/// Handles persistent storage of Kanban boards.
+/// Metadata for tracking active board and board list
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Metadata {
+    active_board: String,
+    #[serde(default)]
+    boards: Vec<String>,
+}
+
+impl Default for Metadata {
+    fn default() -> Self {
+        Self {
+            active_board: "default".to_string(),
+            boards: vec!["default".to_string()],
+        }
+    }
+}
+
+/// Handles persistent storage of multiple Kanban boards.
 ///
 /// Storage manages reading and writing boards to JSON files in platform-specific
 /// configuration directories:
-/// - Linux: `~/.config/kanban-tui/board.json`
-/// - macOS: `~/Library/Application Support/kanban-tui/board.json`
-/// - Windows: `%APPDATA%\kanban-tui\board.json`
-///
-/// # Examples
-///
-/// ```rust,no_run
-/// use kanban_tui::{Board, storage::Storage};
-///
-/// let storage = Storage::new().expect("Failed to create storage");
-/// let mut board = Board::new("Project".to_string());
-///
-/// // Save and load
-/// storage.save(&board).expect("Failed to save");
-/// let loaded = storage.load().expect("Failed to load").unwrap();
-/// assert_eq!(loaded.name, "Project");
-/// ```
+/// - Linux: `~/.config/kanban-tui/boards/`
+/// - macOS: `~/Library/Application Support/kanban-tui/boards/`
+/// - Windows: `%APPDATA%\kanban-tui\boards\`
 pub struct Storage {
-    file_path: PathBuf,
+    boards_dir: PathBuf,
+    metadata_path: PathBuf,
 }
 
 impl Storage {
-    /// Create a new Storage instance with the default file path.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the platform-specific config directory cannot be determined.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use kanban_tui::storage::Storage;
-    ///
-    /// let storage = Storage::new().expect("Failed to create storage");
-    /// println!("Storage path: {:?}", storage.file_path());
-    /// ```
+    /// Create a new Storage instance with the default directory path.
     pub fn new() -> Result<Self, StorageError> {
-        let file_path = Self::default_file_path()?;
-        Ok(Storage { file_path })
-    }
-
-    /// Create a new Storage instance with a custom file path (useful for testing)
-    pub fn with_path(file_path: PathBuf) -> Self {
-        Storage { file_path }
-    }
-
-    /// Get the default file path for storing the board
-    pub fn default_file_path() -> Result<PathBuf, StorageError> {
         let config_dir = dirs::config_dir().ok_or(StorageError::ConfigDirNotFound)?;
         let app_dir = config_dir.join("kanban-tui");
-        Ok(app_dir.join("board.json"))
+        let boards_dir = app_dir.join("boards");
+        let metadata_path = app_dir.join("metadata.json");
+
+        let storage = Storage {
+            boards_dir,
+            metadata_path,
+        };
+
+        // Ensure directory exists and migrate old format if needed
+        storage.ensure_dirs_exist()?;
+        storage.migrate_old_format()?;
+
+        Ok(storage)
     }
 
-    /// Ensure the storage directory exists
-    fn ensure_dir_exists(&self) -> Result<(), StorageError> {
-        if let Some(parent) = self.file_path.parent() {
-            fs::create_dir_all(parent)?;
+    /// Create a Storage instance with custom paths (useful for testing)
+    pub fn with_path(base_dir: PathBuf) -> Self {
+        let boards_dir = base_dir.join("boards");
+        let metadata_path = base_dir.join("metadata.json");
+
+        Storage {
+            boards_dir,
+            metadata_path,
         }
+    }
+
+    /// Ensure the storage directories exist
+    fn ensure_dirs_exist(&self) -> Result<(), StorageError> {
+        fs::create_dir_all(&self.boards_dir)?;
         Ok(())
     }
 
-    /// Save a board to the storage file.
-    ///
-    /// Creates the storage directory if it doesn't exist. The board is serialized
-    /// to pretty-printed JSON.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - The directory cannot be created
-    /// - The board cannot be serialized
-    /// - The file cannot be written
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use kanban_tui::{Board, storage::Storage};
-    ///
-    /// let storage = Storage::new().unwrap();
-    /// let board = Board::new("Project".to_string());
-    /// storage.save(&board).expect("Failed to save board");
-    /// ```
-    pub fn save(&self, board: &Board) -> Result<(), StorageError> {
-        self.ensure_dir_exists()?;
-        let json = serde_json::to_string_pretty(board)?;
-        fs::write(&self.file_path, json)?;
+    /// Migrate old single-board format to new multi-board format
+    fn migrate_old_format(&self) -> Result<(), StorageError> {
+        let old_board_path = self.boards_dir.parent().unwrap().join("board.json");
+
+        // If old format exists and new format doesn't, migrate
+        if old_board_path.exists() && !self.metadata_path.exists() {
+            // Move old board.json to boards/default.json
+            let default_board_path = self.board_path("default");
+            fs::rename(&old_board_path, &default_board_path)?;
+
+            // Create metadata
+            let metadata = Metadata::default();
+            self.save_metadata(&metadata)?;
+        }
+
+        // Ensure metadata exists even if no migration happened
+        if !self.metadata_path.exists() {
+            let metadata = Metadata::default();
+            self.save_metadata(&metadata)?;
+        }
+
         Ok(())
     }
 
-    /// Load a board from the storage file.
-    ///
-    /// Returns `None` if the file doesn't exist.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - The file exists but cannot be read
-    /// - The JSON content is invalid
-    ///
-    /// # Examples
-    ///
-    /// ```rust,no_run
-    /// use kanban_tui::{Board, storage::Storage};
-    ///
-    /// let storage = Storage::new().unwrap();
-    ///
-    /// match storage.load() {
-    ///     Ok(Some(board)) => println!("Loaded board: {}", board.name),
-    ///     Ok(None) => println!("No saved board found"),
-    ///     Err(e) => eprintln!("Error loading board: {}", e),
-    /// }
-    /// ```
-    pub fn load(&self) -> Result<Option<Board>, StorageError> {
-        if !self.file_path.exists() {
+    /// Get the file path for a specific board
+    fn board_path(&self, name: &str) -> PathBuf {
+        let safe_name = Self::sanitize_board_name(name);
+        self.boards_dir.join(format!("{}.json", safe_name))
+    }
+
+    /// Sanitize board name for filesystem safety
+    fn sanitize_board_name(name: &str) -> String {
+        name.chars()
+            .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+            .collect()
+    }
+
+    /// Load metadata
+    fn load_metadata(&self) -> Result<Metadata, StorageError> {
+        if !self.metadata_path.exists() {
+            return Ok(Metadata::default());
+        }
+
+        let json = fs::read_to_string(&self.metadata_path)?;
+        let metadata = serde_json::from_str(&json)?;
+        Ok(metadata)
+    }
+
+    /// Save metadata
+    fn save_metadata(&self, metadata: &Metadata) -> Result<(), StorageError> {
+        let json = serde_json::to_string_pretty(metadata)?;
+        fs::write(&self.metadata_path, json)?;
+        Ok(())
+    }
+
+    /// Get the name of the currently active board
+    pub fn get_active_board_name(&self) -> Result<String, StorageError> {
+        let metadata = self.load_metadata()?;
+        Ok(metadata.active_board)
+    }
+
+    /// Set the active board name
+    pub fn set_active_board_name(&self, name: &str) -> Result<(), StorageError> {
+        let mut metadata = self.load_metadata()?;
+        metadata.active_board = name.to_string();
+
+        // Ensure board exists in the list
+        if !metadata.boards.contains(&name.to_string()) {
+            metadata.boards.push(name.to_string());
+        }
+
+        self.save_metadata(&metadata)?;
+        Ok(())
+    }
+
+    /// List all available boards
+    pub fn list_boards(&self) -> Result<Vec<String>, StorageError> {
+        let metadata = self.load_metadata()?;
+        Ok(metadata.boards)
+    }
+
+    /// Load a specific board by name
+    pub fn load_board(&self, name: &str) -> Result<Option<Board>, StorageError> {
+        let board_path = self.board_path(name);
+
+        if !board_path.exists() {
             return Ok(None);
         }
 
-        let json = fs::read_to_string(&self.file_path)?;
+        let json = fs::read_to_string(&board_path)?;
         let board = serde_json::from_str(&json)?;
         Ok(Some(board))
     }
 
-    /// Check if the storage file exists
-    pub fn exists(&self) -> bool {
-        self.file_path.exists()
+    /// Save a specific board
+    pub fn save_board(&self, name: &str, board: &Board) -> Result<(), StorageError> {
+        self.ensure_dirs_exist()?;
+
+        let board_path = self.board_path(name);
+        let json = serde_json::to_string_pretty(board)?;
+        fs::write(&board_path, json)?;
+
+        // Ensure board is in metadata
+        let mut metadata = self.load_metadata()?;
+        if !metadata.boards.contains(&name.to_string()) {
+            metadata.boards.push(name.to_string());
+            self.save_metadata(&metadata)?;
+        }
+
+        Ok(())
     }
 
-    /// Get the file path being used
+    /// Delete a board
+    pub fn delete_board(&self, name: &str) -> Result<(), StorageError> {
+        let board_path = self.board_path(name);
+
+        if board_path.exists() {
+            fs::remove_file(&board_path)?;
+        }
+
+        // Remove from metadata
+        let mut metadata = self.load_metadata()?;
+        metadata.boards.retain(|b| b != name);
+
+        // If we deleted the active board, switch to default or first available
+        if metadata.active_board == name {
+            metadata.active_board = metadata.boards.first()
+                .cloned()
+                .unwrap_or_else(|| "default".to_string());
+        }
+
+        self.save_metadata(&metadata)?;
+        Ok(())
+    }
+
+    /// Check if a board exists
+    pub fn board_exists(&self, name: &str) -> bool {
+        self.board_path(name).exists()
+    }
+
+    /// Legacy method for backward compatibility - loads active board
+    #[deprecated(note = "Use load_board with get_active_board_name instead")]
+    pub fn load(&self) -> Result<Option<Board>, StorageError> {
+        let active_name = self.get_active_board_name()?;
+        self.load_board(&active_name)
+    }
+
+    /// Legacy method for backward compatibility - saves to active board
+    #[deprecated(note = "Use save_board with board name instead")]
+    pub fn save(&self, board: &Board) -> Result<(), StorageError> {
+        let active_name = self.get_active_board_name()?;
+        self.save_board(&active_name, board)
+    }
+
+    /// Get the file path being used (legacy)
+    #[deprecated(note = "Storage now uses multiple files")]
     pub fn file_path(&self) -> &PathBuf {
-        &self.file_path
+        &self.metadata_path
     }
 }
-
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::env;
-
-    // Compile-time test to ensure StorageError is Send + Sync
-    // This is required for proper error handling in async/multi-threaded contexts
-    #[allow(dead_code)]
-    fn assert_error_traits() {
-        fn assert_send<T: Send>() {}
-        fn assert_sync<T: Sync>() {}
-        assert_send::<StorageError>();
-        assert_sync::<StorageError>();
-    }
 
     fn temp_storage() -> Storage {
         let temp_dir = env::temp_dir();
@@ -219,75 +281,70 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let test_file = temp_dir.join(format!("kanban-test-{}.json", timestamp));
-        Storage::with_path(test_file)
+        let test_dir = temp_dir.join(format!("kanban-test-{}", timestamp));
+        Storage::with_path(test_dir)
     }
 
     #[test]
-    fn test_save_and_load() {
+    fn test_save_and_load_board() {
         let storage = temp_storage();
-        let mut board = Board::new("Test Board".to_string());
-        board.add_task(0, "Task 1".to_string()).unwrap();
-        board.add_task(1, "Task 2".to_string()).unwrap();
+        storage.ensure_dirs_exist().unwrap();
 
-        // Save the board
-        storage.save(&board).unwrap();
+        let mut board = Board::new("Test Board");
+        board.add_task(0, "Task 1").unwrap();
 
-        // Load it back
-        let loaded = storage.load().unwrap();
+        storage.save_board("test", &board).unwrap();
+
+        let loaded = storage.load_board("test").unwrap();
         assert!(loaded.is_some());
         let loaded_board = loaded.unwrap();
-
         assert_eq!(loaded_board.name, "Test Board");
         assert_eq!(loaded_board.columns[0].tasks.len(), 1);
-        assert_eq!(loaded_board.columns[0].tasks[0].title, "Task 1");
-        assert_eq!(loaded_board.columns[1].tasks.len(), 1);
-        assert_eq!(loaded_board.columns[1].tasks[0].title, "Task 2");
-
-        // Cleanup
-        fs::remove_file(storage.file_path()).ok();
     }
 
     #[test]
-    fn test_load_nonexistent_file() {
+    fn test_list_boards() {
         let storage = temp_storage();
+        storage.ensure_dirs_exist().unwrap();
 
-        // Should return None for non-existent file
-        let result = storage.load().unwrap();
-        assert!(result.is_none());
+        let board1 = Board::new("Board 1");
+        let board2 = Board::new("Board 2");
+
+        storage.save_board("board1", &board1).unwrap();
+        storage.save_board("board2", &board2).unwrap();
+
+        let boards = storage.list_boards().unwrap();
+        assert!(boards.contains(&"board1".to_string()));
+        assert!(boards.contains(&"board2".to_string()));
     }
 
     #[test]
-    fn test_exists() {
+    fn test_active_board_tracking() {
         let storage = temp_storage();
-        let board = Board::new("Test".to_string());
+        storage.ensure_dirs_exist().unwrap();
 
-        assert!(!storage.exists());
-
-        storage.save(&board).unwrap();
-        assert!(storage.exists());
-
-        // Cleanup
-        fs::remove_file(storage.file_path()).ok();
+        storage.set_active_board_name("my-board").unwrap();
+        let active = storage.get_active_board_name().unwrap();
+        assert_eq!(active, "my-board");
     }
 
     #[test]
-    fn test_save_creates_directory() {
-        let temp_dir = env::temp_dir();
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let nested_path = temp_dir.join(format!("kanban-test-dir-{}", timestamp));
-        let file_path = nested_path.join("board.json");
+    fn test_delete_board() {
+        let storage = temp_storage();
+        storage.ensure_dirs_exist().unwrap();
 
-        let storage = Storage::with_path(file_path.clone());
-        let board = Board::new("Test".to_string());
+        let board = Board::new("To Delete");
+        storage.save_board("deleteme", &board).unwrap();
+        assert!(storage.board_exists("deleteme"));
 
-        storage.save(&board).unwrap();
-        assert!(file_path.exists());
+        storage.delete_board("deleteme").unwrap();
+        assert!(!storage.board_exists("deleteme"));
+    }
 
-        // Cleanup
-        fs::remove_dir_all(&nested_path).ok();
+    #[test]
+    fn test_sanitize_board_name() {
+        assert_eq!(Storage::sanitize_board_name("My Board!"), "My-Board-");
+        assert_eq!(Storage::sanitize_board_name("test@123"), "test-123");
+        assert_eq!(Storage::sanitize_board_name("valid_name-123"), "valid_name-123");
     }
 }

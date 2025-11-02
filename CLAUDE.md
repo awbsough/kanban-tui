@@ -18,11 +18,22 @@ A Terminal User Interface (TUI) application for managing Kanban boards, written 
 ```
 kanban-tui/
 ├── src/
-│   ├── main.rs          # Application entry point and TUI implementation
-│   ├── lib.rs           # Public library interface
-│   └── storage.rs       # Persistence layer (JSON storage)
-├── tests/               # Integration tests
-└── examples/            # Example usage (future)
+│   ├── main.rs           # Application entry point (terminal setup)
+│   ├── app.rs            # Application state management
+│   ├── input.rs          # Keyboard event handling
+│   ├── ui/               # UI rendering modules
+│   │   ├── mod.rs        # Main UI coordination
+│   │   ├── column.rs     # Column rendering
+│   │   ├── task_detail.rs # Task detail popup
+│   │   ├── status_bar.rs # Status bar with help text
+│   │   └── board_selector.rs # Board selector popup
+│   ├── lib.rs            # Public library interface
+│   ├── task.rs           # Task and Priority types
+│   ├── column.rs         # Column type
+│   ├── board.rs          # Board logic
+│   └── storage.rs        # Multi-board persistence
+├── tests/                # Integration tests
+└── examples/             # Example usage (future)
 ```
 
 ## Development Environment
@@ -180,7 +191,7 @@ cargo run
 - [x] Color coding and priorities
 
 ### Phase 3: Advanced Features
-- [ ] Multiple boards
+- [x] Multiple boards (create, switch, delete boards)
 - [ ] Custom columns
 - [ ] Task filtering and search
 - [ ] Export/import functionality
@@ -196,17 +207,55 @@ cargo run
 7. **Auto-load**: Board automatically loads from storage on startup
 8. **Development Environment**: Nix flakes for reproducibility across machines
 
+## Multiple Boards Feature
+
+### Overview
+Users can create and manage multiple Kanban boards for different projects or contexts. Each board is stored as a separate JSON file, allowing easy organization of tasks.
+
+### Keyboard Shortcuts
+- `b` - Open board selector
+- `B` (Shift+b) - Create new board
+- In board selector:
+  - `j/k` or `↓/↑` - Navigate boards
+  - `Enter` - Switch to selected board
+  - `n` or `B` - Create new board
+  - `d` - Delete selected board (requires at least 2 boards)
+  - `Esc` - Close selector
+
+### Storage Structure
+```
+~/.config/kanban-tui/           # Linux
+~/Library/Application Support/kanban-tui/  # macOS
+%APPDATA%\kanban-tui\           # Windows
+├── boards/
+│   ├── default.json            # Default board
+│   ├── work.json               # Work board
+│   └── personal.json           # Personal board
+└── metadata.json               # Tracks active board and board list
+```
+
+### Features
+- **Board Creation**: Create boards with custom names
+- **Board Switching**: Quickly switch between boards
+- **Board Deletion**: Delete boards (minimum 1 board required)
+- **Auto-migration**: Existing `board.json` files automatically migrate to new format
+- **Active Board Tracking**: App remembers your last active board
+- **Current Board Indicator**: Status bar shows current board name
+
 ## Storage Implementation
 
 ### Architecture
 The storage module (`src/storage.rs`) provides persistent storage using JSON files:
 
 - **Storage Location**: Uses `dirs` crate to get platform-specific config directory
-  - Linux: `~/.config/kanban-tui/board.json`
-  - macOS: `~/Library/Application Support/kanban-tui/board.json`
-  - Windows: `%APPDATA%\kanban-tui\board.json`
+  - Linux: `~/.config/kanban-tui/boards/`
+  - macOS: `~/Library/Application Support/kanban-tui/boards/`
+  - Windows: `%APPDATA%\kanban-tui\boards\`
+- **Multiple Boards**: Each board stored as separate JSON file
+- **Metadata Tracking**: `metadata.json` tracks active board and board list
+- **Auto-migration**: Automatically migrates old single-board format
 - **Auto-save**: Automatically saves after create/delete/move operations
-- **Auto-load**: Loads saved board on application startup
+- **Auto-load**: Loads active board on application startup
 - **Error Handling**: Gracefully handles missing files (creates new board) and I/O errors
 
 ### Usage
@@ -216,16 +265,22 @@ use kanban_tui::storage::Storage;
 // Create storage with default location
 let storage = Storage::new()?;
 
-// Save board
-storage.save(&board)?;
+// List all boards
+let boards = storage.list_boards()?;
 
-// Load board (returns None if file doesn't exist)
-let board = storage.load()?.unwrap_or_else(|| Board::new("Default".to_string()));
+// Load a specific board
+let board = storage.load_board("work")?
+    .unwrap_or_else(|| Board::new("work"));
 
-// Check if storage file exists
-if storage.exists() {
-    println!("Found existing board at: {:?}", storage.file_path());
-}
+// Save a board
+storage.save_board("work", &board)?;
+
+// Get/set active board
+let active = storage.get_active_board_name()?;
+storage.set_active_board_name("personal")?;
+
+// Delete a board
+storage.delete_board("old-project")?;
 ```
 
 ## Notes for AI Assistants

@@ -1,5 +1,6 @@
 //! UI rendering modules for the Kanban TUI.
 
+mod board_selector;
 mod column;
 mod status_bar;
 mod task_detail;
@@ -10,6 +11,7 @@ use ratatui::{
     Frame,
 };
 
+pub use board_selector::render_board_selector;
 pub use column::render_column;
 pub use status_bar::render_status_bar;
 pub use task_detail::render_task_detail;
@@ -33,6 +35,11 @@ pub fn ui(f: &mut Frame, app: &App) {
     // Render task detail popup if in viewing mode
     if app.input_mode == InputMode::Viewing {
         render_task_detail(f, app, size);
+    }
+
+    // Render board selector if in board selection mode
+    if app.input_mode == InputMode::SelectingBoard {
+        render_board_selector(f, app, size);
     }
 }
 
